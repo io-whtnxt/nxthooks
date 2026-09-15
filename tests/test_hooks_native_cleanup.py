@@ -100,8 +100,25 @@ def test_the_lifecycle_lock_is_not_in_the_world_writable_temp_dir(hooks_machine)
     host = hooks_machine("claude-code")
     path = operation_lock.lock_path(host)
 
-    assert not path.is_relative_to(Path(tempfile.gettempdir()))
     assert path.is_relative_to(host.home)
+
+    # Asserted against the source, not against `gettempdir()`. The original
+    # check was `not path.is_relative_to(gettempdir())`, which says nothing
+    # here: `hooks_machine` builds its home under pytest's `tmp_path`, which
+    # on Linux *is* inside /tmp -- so the test failed there on its own
+    # sandbox. It passed on macOS only because `tmp_path` is
+    # `/private/var/folders/...` while `gettempdir()` returns
+    # `/var/folders/...`, and `is_relative_to` is textual. Green on one
+    # platform by a missing path prefix, red on the other for no product
+    # reason. What actually matters is that the lock location is derived from
+    # the host and never from the system temp dir.
+    source = Path(operation_lock.__file__).read_text(encoding="utf-8")
+    assert "tempfile" not in source, (
+        "the lifecycle lock must be derived from the host, not from the "
+        "system temp dir: /tmp is world-writable on a shared host and the "
+        "name was fully derivable, so any local user could create it first "
+        "and hold LOCK_EX on it"
+    )
 
 
 def test_the_lock_is_not_inside_the_state_directory_uninstall_removes(hooks_machine):
