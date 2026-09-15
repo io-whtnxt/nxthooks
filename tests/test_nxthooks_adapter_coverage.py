@@ -18,6 +18,8 @@ well short of a real TypeScript parser.
 import re
 from pathlib import Path
 
+import pytest
+
 ADAPTERS = Path(__file__).resolve().parents[1] / "nxthooks" / "adapters"
 OPENCODE = ADAPTERS / "opencode-plugin" / "nxthooks.ts"
 PI = ADAPTERS / "pi-extension" / "index.ts"
@@ -213,3 +215,46 @@ def test_every_ts_adapter_covers_the_tool_events():
     for harness, path in (("opencode", OPENCODE), ("pi", PI)):
         for event in ("before_tool", "after_tool"):
             _assert_wired(harness, event, path)
+
+
+# ------------------------------------------------- harness-native tool names
+
+#: What each harness calls the tool, against the canonical name a manifest
+#: writes. Every row observed in a live turn, not read from documentation.
+NATIVE_TOOL_NAMES = [
+    # (harness, native name, a canonical matcher that must select it)
+    ("codex", "apply_patch", "Edit"),
+    ("hermes", "terminal", "Bash"),
+    ("hermes", "write_file", "Write"),
+    ("opencode", "bash", "Bash"),
+    ("pi", "bash", "Bash"),
+]
+
+
+@pytest.mark.parametrize("harness,native,matcher", NATIVE_TOOL_NAMES)
+def test_a_manifest_matcher_selects_each_harnesss_own_tool_name(harness, native, matcher):
+    """"Write a hook once and run it on five harnesses" is the whole claim,
+    and it is false the moment a manifest has to know what each one calls
+    bash.
+
+    Hermes calls it `terminal` and its writer `write_file`, so
+    `matchers = ["Bash"]` and `matchers = ["Write", ...]` selected nothing
+    there -- every matcher-bearing hook in the catalogue, the secret scanner
+    included, installed and verified and never ran. Observed in a live turn
+    on hermes-agent 0.21.1, the same way Codex's `apply_patch` was found.
+    """
+    from nxthooks.manifest import matcher_matches
+
+    assert matcher_matches({"matchers": [matcher]}, native), (
+        f"{harness} calls it {native!r}; a manifest matching {matcher!r} "
+        "does not select it"
+    )
+
+
+def test_an_unrelated_tool_is_still_not_selected():
+    """The aliases must not turn a matcher into a wildcard."""
+    from nxthooks.manifest import matcher_matches
+
+    assert not matcher_matches({"matchers": ["Bash"]}, "write_file")
+    assert not matcher_matches({"matchers": ["Write"]}, "terminal")
+    assert not matcher_matches({"matchers": ["Bash"]}, "read_file")

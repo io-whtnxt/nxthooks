@@ -101,6 +101,29 @@ def harness_enabled(entry: dict, harness: str) -> bool:
     return bool(override)
 
 
+#: Each harness's own name for a tool, against the Claude-Code-shaped names a
+#: manifest is written in. Normalising here is the point of the component:
+#: "write a hook once and run it on five harnesses" is false the moment a
+#: manifest has to know that Hermes calls bash `terminal`.
+#:
+#: Every row observed in a live turn, never read from documentation. Hermes'
+#: two cost it every matcher-bearing hook in the catalogue -- the secret
+#: scanner included -- because `matchers = ["Bash"]` and
+#: `matchers = ["Write", ...]` select nothing against `terminal` and
+#: `write_file`, and selecting nothing is indistinguishable from running and
+#: finding nothing.
+#:
+#: Casing is not handled here; `matcher_matches` lowercases both sides, which
+#: is what makes OpenCode's and pi's `bash` match a manifest's `Bash`.
+NATIVE_TOOL_ALIASES = {
+    # Codex puts every edit through one unified patch tool.
+    "apply_patch": {"edit", "write", "multiedit"},
+    # Hermes (hermes-agent 0.21.1).
+    "terminal": {"bash"},
+    "write_file": {"write"},
+}
+
+
 def matcher_matches(entry: dict, tool: str | None) -> bool:
     """Tool-name glob, case-insensitive: harnesses disagree on casing
     (Claude Code 'Write' vs OpenCode 'write'), manifests shouldn't care."""
@@ -115,9 +138,7 @@ def matcher_matches(entry: dict, tool: str | None) -> bool:
     # matcher layer aliases that call to Claude-style Edit and Write. Preserve
     # the same equivalence inside the shared dispatcher, otherwise Codex would
     # invoke us and the canonical file-edit guards would then select nothing.
-    aliases = {tool.lower()}
-    if tool.lower() == "apply_patch":
-        aliases.update({"edit", "write", "multiedit"})
+    aliases = {tool.lower()} | NATIVE_TOOL_ALIASES.get(tool.lower(), set())
     return any(
         fnmatch.fnmatch(alias, matcher.lower())
         for alias in aliases
