@@ -1,0 +1,39 @@
+name: publish
+
+# Trusted Publishing: PyPI mints a short-lived token from GitHub's OIDC
+# identity for this workflow, so there is no API token to store, rotate, or
+# leak -- nothing secret exists on a laptop or in this repo. Configure the
+# other half once at
+# https://pypi.org/manage/project/nxthooks/settings/publishing/
+# (owner io-whtnxt, repo nxthooks, workflow publish.yml, environment pypi).
+#
+# Tag-triggered, not push-to-main: a version on PyPI can be yanked but its
+# number can never be reused, so publishing is a deliberate act.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # The tag says nothing about whether the code works. Run the same matrix CI
+  # runs before anything is uploaded.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      # Fails the release rather than publishing a package whose metadata
+      # PyPI would render wrong and which cannot be replaced in place.
+      - run: pipx run twine check --strict dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
