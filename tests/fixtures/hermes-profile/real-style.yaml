@@ -1,0 +1,28 @@
+model:
+  api_mode: chat_completions
+  default: litellm-primarylocal
+  provider: litellm
+providers:
+  deepseek:
+    api_mode: chat_completions
+    base_url: https://api.deepseek.com/v1
+    key_env: DEEPSEEK_API_KEY
+    models:
+      - deepseek-v4-flash
+      - deepseek-v4-pro
+      - deepseek-chat-v3-0324
+      - deepseek-reasoner
+    name: DeepSeek (Cloud)
+fallback_providers:
+  - copilot
+toolsets:
+  - hermes-cli
+  - web
+mcp_servers:
+  gsc:
+    args:
+      - /home/echalupa/.mcp-servers/gsc-mcp/dist/index.js
+    command: /usr/bin/node
+    env:
+      GOOGLE_CLIENT_ID: 111111111111-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}

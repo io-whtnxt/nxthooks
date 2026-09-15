@@ -936,7 +936,7 @@ def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
     if not (src_pkg / "_vendor").is_dir():
         import nxthooks._vendor.projection
 
-        framework = root / "lib" / FRAMEWORK_DIR / "nxthooks._vendor"
+        framework = root / "lib" / FRAMEWORK_DIR / "nxthooks/_vendor"
         if framework.exists():
             shutil.rmtree(framework)
         framework.mkdir(parents=True)

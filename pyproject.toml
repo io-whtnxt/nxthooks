@@ -28,6 +28,10 @@ nxthooks = "nxthooks.cli:main"
 [tool.setuptools.packages.find]
 include = ["nxthooks*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.setuptools.package-data]
 "nxthooks" = ["builtin/*.toml", "adapters/**/*", "*.toml", "*.yaml", "*.json"]
 "nxthooks._vendor.nxtgrep" = ["patterns/*.conf"]
+"nxthooks._vendor" = ["schema/*.json"]

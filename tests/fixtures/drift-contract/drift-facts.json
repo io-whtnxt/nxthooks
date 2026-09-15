@@ -1,0 +1,48 @@
+{
+  "emptyStatement": null,
+  "grounding": [
+    {
+      "line": "billing: grounded to contradicted",
+      "recurring": false
+    }
+  ],
+  "hasMovement": true,
+  "period": "Period: June 01, 2026 to July 01, 2026",
+  "stamp": "July 01, 2026",
+  "structural": [
+    {
+      "items": [
+        {
+          "recurring": true,
+          "text": "Skill 'old-skill' isn't claimed by any function."
+        }
+      ],
+      "label": "New bindings"
+    },
+    {
+      "items": [
+        {
+          "recurring": false,
+          "text": "Agent 'gone' isn't claimed by any function."
+        }
+      ],
+      "label": "Resolved bindings"
+    }
+  ],
+  "telemetry": [
+    "triage: runs 4 to 11"
+  ],
+  "tier": [
+    {
+      "function": "Billing",
+      "ladderLabel": "T1 to T2",
+      "recurring": false
+    },
+    {
+      "function": "Triage",
+      "ladderLabel": "T0 to T1",
+      "recurring": true
+    }
+  ],
+  "title": "Sample Op"
+}

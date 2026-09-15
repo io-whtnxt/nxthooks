@@ -645,7 +645,7 @@ SHAPES = (SHAPE_DEV, SHAPE_INSTALLED, SHAPE_APP, SHAPE_UNKNOWN)
 
 SHAPE_ENV = "NXTOS_SHAPE"
 
-DISTRIBUTION = "nxthooks._vendor"
+DISTRIBUTION = "nxthooks"
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,15 @@
+{
+  "verified_codex_cli": "0.151.0",
+  "source": "https://learn.chatgpt.com/docs/hooks",
+  "events": {
+    "SessionStart": {"canonical": "session_start", "effect": "inject"},
+    "UserPromptSubmit": {"canonical": "prompt_submit", "effect": "inject_or_block"},
+    "PreToolUse": {"canonical": "before_tool", "effect": "block"},
+    "PostToolUse": {"canonical": "after_tool", "effect": "observe_or_feedback"},
+    "Stop": {"canonical": "stop", "effect": "continue_turn"},
+    "SessionEnd": {"canonical": "session_end", "effect": "advisory"}
+  },
+  "pre_tool_coverage": ["Bash", "apply_patch", "MCP", "most_local_function_tools"],
+  "pre_tool_exclusions": ["hosted_tools", "specialized_opt_out_paths"],
+  "project_hooks_require_trust": true
+}

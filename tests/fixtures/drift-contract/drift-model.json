@@ -1,0 +1,58 @@
+{
+  "grounding": [
+    {
+      "detail": "grounded to contradicted",
+      "identity": "billing",
+      "recurring": false
+    }
+  ],
+  "hasMovement": true,
+  "kind": "drift",
+  "period": "Period: June 01, 2026 to July 01, 2026",
+  "stamp": "July 01, 2026",
+  "structural": [
+    {
+      "items": [
+        {
+          "recurring": true,
+          "text": "Skill 'old-skill' isn't claimed by any function."
+        }
+      ],
+      "label": "New bindings"
+    },
+    {
+      "items": [
+        {
+          "recurring": false,
+          "text": "Agent 'gone' isn't claimed by any function."
+        }
+      ],
+      "label": "Resolved bindings"
+    }
+  ],
+  "telemetry": [
+    {
+      "detail": "runs 4 to 11",
+      "identity": "triage"
+    }
+  ],
+  "tier": [
+    {
+      "current": 2,
+      "function": "Billing",
+      "ladderLabel": "T1 to T2",
+      "recurring": false,
+      "target": 3,
+      "was": 1
+    },
+    {
+      "current": 1,
+      "function": "Triage",
+      "ladderLabel": "T0 to T1",
+      "recurring": true,
+      "target": 2,
+      "was": 0
+    }
+  ],
+  "title": "Sample Op"
+}

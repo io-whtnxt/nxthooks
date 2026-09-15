@@ -1,0 +1,60 @@
+{
+  "currentState": "routing runs through the owner",
+  "functions": [
+    {
+      "build": "auto-invoice from PSA",
+      "ladderLabel": "T1 to T3",
+      "quickWin": false,
+      "readinessBlocker": "fragmented source of truth",
+      "roiSignal": "3 hrs/wk",
+      "title": "Billing"
+    },
+    {
+      "build": "classifier with human approval",
+      "ladderLabel": "T0 to T2",
+      "quickWin": true,
+      "readinessBlocker": null,
+      "roiSignal": "6 hrs/wk",
+      "title": "Triage"
+    }
+  ],
+  "operationTitle": "Sample Op",
+  "quickWin": {
+    "build": "classifier with human approval",
+    "meta": "T0 to T2 \u00b7 6 hrs/wk",
+    "name": "Triage"
+  },
+  "roadmap": [
+    {
+      "move": "T0 to T2",
+      "title": "Triage"
+    },
+    {
+      "move": "T1 to T3",
+      "title": "Billing"
+    }
+  ],
+  "rungs": [
+    {
+      "desc": "done from memory; nothing written or tooled",
+      "key": "T0",
+      "name": "Tribal/manual"
+    },
+    {
+      "desc": "documented or tooled, but a human drives every step",
+      "key": "T1",
+      "name": "Operationalized"
+    },
+    {
+      "desc": "the system drafts or executes; a human approves each action",
+      "key": "T2",
+      "name": "Assisted"
+    },
+    {
+      "desc": "runs unattended; exceptions surface to the operator",
+      "key": "T3",
+      "name": "Autonomous"
+    }
+  ],
+  "stamp": "January 01, 2026"
+}

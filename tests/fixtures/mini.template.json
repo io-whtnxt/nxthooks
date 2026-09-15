@@ -1,0 +1,33 @@
+{
+  "name": "mini-workflow-__NXT_CLIENT__",
+  "nodes": [
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "parameters": {
+        "site_url": "__NXT_SITE_URL__",
+        "domain": "__NXT_DOMAIN__",
+        "repo": "__NXT_REPO__",
+        "hermes_profile": "__NXT_HERMES_PROFILE__",
+        "matrix_room": "__NXT_MATRIX_ROOM__",
+        "ssh_host": "__NXT_SSH_HOST__",
+        "vercel_project": "__NXT_VERCEL_PROJECT__",
+        "vercel_team": "__NXT_VERCEL_TEAM__",
+        "matrix_hs": "__NXT_MATRIX_HS__",
+        "nxtos_dir": "__NXT_NXTOS_DIR__",
+        "allowed_numbers": __NXT_ALLOWED_NUMBERS__
+      },
+      "credentials": {
+        "postgres": "__NXT_CRED_POSTGRES__",
+        "matrix": "__NXT_CRED_MATRIX__",
+        "gsc": "__NXT_CRED_GSC__",
+        "ssh": "__NXT_CRED_SSH__",
+        "hermes": "__NXT_CRED_HERMES__",
+        "nocodb": "__NXT_CRED_NOCODB__",
+        "ollama": "__NXT_CRED_OLLAMA__",
+        "langfuse": "__NXT_CRED_LANGFUSE__",
+        "vercel": "__NXT_CRED_VERCEL__"
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Hermes profile config - comments here must survive a NxtMCP sync.
+model:
+  provider: litellm
+  context_length: 131072
+
+mcp_servers:
+  # hand-maintained, not in any registry
+  medusa:
+    command: node
+    args:
+      - /home/echalupa/.mcp-local/medusa/index.js
+  linkedin:
+    type: stdio
+    command: node
+    args:
+      - /home/echalupa/.mcp-servers/linkedin-mcp/dist/index.js
+    enabled: false
+    timeout: 600
+
+agent:
+  max_turns: 120

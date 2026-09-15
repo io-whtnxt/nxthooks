@@ -1,0 +1,6 @@
+# Workspaces nxtmcp/observe is vendored into, one path per line. ~ expands
+# to $HOME. Blank lines and lines starting with # are ignored. Read by
+# tests/test_nxtmcp_observe_parity.py, which pins each listed copy that
+# exists on this machine against the canonical source in this repo. Add a
+# workspace here when you vendor into it.
+~/Documents/Coding Projects/Whtnxt Agent/nxtmcp/observe

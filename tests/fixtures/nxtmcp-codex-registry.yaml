@@ -1,0 +1,33 @@
+profiles:
+  core: core:true servers
+  full: all servers
+servers:
+  bearer-core:
+    type: http
+    url: https://example.test/mcp
+    headers:
+      Authorization: Bearer {env:BEARER_TOKEN}
+    core: true
+  stdio-core:
+    type: stdio
+    command: node
+    args: [./servers/example.js]
+    env:
+      SERVICE_TOKEN: "{env:SERVICE_TOKEN}"
+      OUTPUT_MODE: compact
+    core: true
+  optional-http:
+    type: http
+    url: https://optional.example.test/mcp
+    core: false
+  unsupported-header:
+    type: http
+    url: https://headers.example.test/mcp
+    headers:
+      X-API-Key: "{env:HEADER_TOKEN}"
+    core: false
+  pro-only:
+    type: stdio
+    hosts: [pro]
+    command: /usr/bin/example-server
+    core: false

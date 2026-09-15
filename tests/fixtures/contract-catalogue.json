@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "facts": [
+    {
+      "name": "streaming",
+      "source": "client"
+    },
+    {
+      "name": "session_open",
+      "source": "server",
+      "value": false
+    },
+    {
+      "name": "draft_empty",
+      "source": "client"
+    },
+    {
+      "name": "file_selected",
+      "source": "client"
+    }
+  ],
+  "commands": [
+    {
+      "id": "view.chat",
+      "title": "Chat",
+      "keywords": [
+        "chat",
+        "view"
+      ],
+      "needsTarget": false,
+      "requires": [],
+      "forbids": []
+    },
+    {
+      "id": "view.organizer",
+      "title": "Organizer",
+      "keywords": [
+        "organizer",
+        "map",
+        "view"
+      ],
+      "needsTarget": false,
+      "requires": [],
+      "forbids": []
+    },
+    {
+      "id": "view.files",
+      "title": "Files",
+      "keywords": [
+        "files",
+        "workspace",
+        "view"
+      ],
+      "needsTarget": false,
+      "requires": [],
+      "forbids": []
+    },
+    {
+      "id": "view.plugins",
+      "title": "Plugins",
+      "keywords": [
+        "plugins",
+        "view"
+      ],
+      "needsTarget": false,
+      "requires": [],
+      "forbids": []
+    },
+    {
+      "id": "view.settings",
+      "title": "Settings",
+      "keywords": [
+        "settings",
+        "preferences",
+        "config",
+        "view"
+      ],
+      "needsTarget": false,
+      "requires": [],
+      "forbids": []
+    },
+    {
+      "id": "chat.stop",
+      "title": "Stop generating",
+      "keywords": [
+        "stop",
+        "cancel"
+      ],
+      "needsTarget": false,
+      "requires": [
+        "streaming"
+      ],
+      "forbids": []
+    },
+    {
+      "id": "chat.send",
+      "title": "Send message",
+      "keywords": [
+        "send",
+        "submit"
+      ],
+      "needsTarget": false,
+      "requires": [
+        "session_open"
+      ],
+      "forbids": [
+        "streaming",
+        "draft_empty"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "comment": "Golden cases for tests/test_contract_availability.py. Shared with a second implementation when one exists; the retired shell held the first (deleted by N5).",
+  "cases": [
+    {
+      "name": "no rule is always available",
+      "requires": [],
+      "forbids": [],
+      "facts": {},
+      "expected": true
+    },
+    {
+      "name": "requires a true fact",
+      "requires": ["streaming"],
+      "forbids": [],
+      "facts": { "streaming": true },
+      "expected": true
+    },
+    {
+      "name": "requires a false fact",
+      "requires": ["streaming"],
+      "forbids": [],
+      "facts": { "streaming": false },
+      "expected": false
+    },
+    {
+      "name": "requires a missing fact, treated as false",
+      "requires": ["streaming"],
+      "forbids": [],
+      "facts": {},
+      "expected": false
+    },
+    {
+      "name": "forbids a true fact",
+      "requires": [],
+      "forbids": ["permission_pending"],
+      "facts": { "permission_pending": true },
+      "expected": false
+    },
+    {
+      "name": "forbids a false fact",
+      "requires": [],
+      "forbids": ["permission_pending"],
+      "facts": { "permission_pending": false },
+      "expected": true
+    },
+    {
+      "name": "forbids a missing fact, treated as false",
+      "requires": [],
+      "forbids": ["permission_pending"],
+      "facts": {},
+      "expected": true
+    },
+    {
+      "name": "requires and forbids together, both satisfied",
+      "requires": ["session_open"],
+      "forbids": ["streaming"],
+      "facts": { "session_open": true, "streaming": false },
+      "expected": true
+    },
+    {
+      "name": "requires and forbids together, forbid wins",
+      "requires": ["session_open"],
+      "forbids": ["streaming"],
+      "facts": { "session_open": true, "streaming": true },
+      "expected": false
+    },
+    {
+      "name": "multiple requires are conjunctive",
+      "requires": ["session_open", "draft_empty"],
+      "forbids": [],
+      "facts": { "session_open": true, "draft_empty": false },
+      "expected": false
+    }
+  ]
+}

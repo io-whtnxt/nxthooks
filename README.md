@@ -10,7 +10,7 @@ harness's own event names and verdict shapes to and from one contract:
     exit 2   block   (stderr is the reason the model is shown)
 
 ```console
-$ pip install nxthooks
+$ pip install git+https://github.com/io-whtnxt/nxthooks   # not on PyPI yet
 $ nxthooks install
 $ nxthooks list
 NAME         TIER     EVENTS       MATCHERS                            POLICY
