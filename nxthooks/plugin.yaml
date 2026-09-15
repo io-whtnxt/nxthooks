@@ -1,0 +1,46 @@
+# Read-only commands only. `install`, `uninstall` and `dispatch` are
+# deliberately absent.
+#
+# `dispatch` is not an operator command at all: transports call it with a
+# harness and an event, and running it by hand from a form would fire hooks
+# against arguments nobody is in a position to fill correctly.
+#
+# `install` and `uninstall` change wiring in other tools' config files, and
+# `uninstall` removes it. This pane offers one Run control per command with no
+# confirmation step and no undo, because until now every command behind it has
+# been a read. Putting a command that rewrites another tool's config next to
+# `verify` would make the two look like peers, and they are not. They come back
+# when the pane can tell an operator what a command is about to change and get
+# an answer before it does.
+id: nxthooks
+displayName: NxtHooks
+kind: cli
+version: 1.0.0
+schemaVersion: 1
+tier: 1
+group: infra
+requiredEnv: []
+
+cli:
+  entrypoint: nxthooks
+  commands:
+    - name: verify
+      summary: Re-check every wiring path and print the capability matrix
+      argv: ["verify"]
+      # `nxthooks verify` prints a capability matrix for a person to read and
+      # has no --json. Declaring check-result here would arm a parser for a
+      # sentinel the CLI never prints, and the pane would then render every
+      # clean run as a result that failed to arrive. It becomes check-result
+      # the day the CLI gains a machine-readable exit, not before.
+      outputShape: text
+      timeoutMs: 30000
+    - name: doctor
+      summary: Verify, then dispatch synthetic events through each transport
+      argv: ["doctor"]
+      outputShape: text
+      timeoutMs: 60000
+    - name: list
+      summary: Show every hook in the directory, with its events and matchers
+      argv: ["list"]
+      outputShape: text
+      timeoutMs: 30000

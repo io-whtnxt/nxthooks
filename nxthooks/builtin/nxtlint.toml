@@ -1,0 +1,19 @@
+# Advisory Python lint on files an agent just wrote.
+#
+# after_tool, not before_tool: the write has landed, so there is a real file
+# to read and no risk of judging a function an agent is two Edits into
+# writing. The source reports by exiting 0 with CTX lines rather than by
+# exiting 2, so `policy` below is belt-and-braces -- flipping it to "enforce"
+# still cannot turn this into a gate that refuses an edit.
+#
+# fail = "open" because advice that costs an agent its edit when the linter
+# breaks is worse than no advice at all.
+[[hook]]
+name = "nxtlint"
+events = ["after_tool"]
+matchers = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+source = "~/.local/share/nxt/lint/bin/nxtlint-hook.py"
+provision = "nxthooks._vendor.nxtlint.install"
+policy = "advise"
+fail = "open"
+timeout_ms = 15000

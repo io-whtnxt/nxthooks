@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "id": "hooks",
+  "owner": "nxtos",
+  "configuration": {
+    "source_of_truth": "native",
+    "fields": {
+      "machine": [
+        [
+          "policy",
+          "default"
+        ],
+        [
+          "scope",
+          "include"
+        ],
+        [
+          "scope",
+          "exclude"
+        ]
+      ]
+    },
+    "writable": true,
+    "application": "native-workflow-required",
+    "native_provider_required": true,
+    "provider": "nxthooks.pack",
+    "harness_registration": "native-detection-only"
+  },
+  "coverage": {
+    "status": "partial",
+    "requires_native_validation": false,
+    "full_parity": false
+  },
+  "operations": {
+    "hooks": {
+      "list": {
+        "args": [
+          "list"
+        ],
+        "writes": false,
+        "fields": []
+      },
+      "verify": {
+        "args": [
+          "verify"
+        ],
+        "writes": false,
+        "fields": []
+      },
+      "install": {
+        "args": [
+          "install"
+        ],
+        "writes": true,
+        "fields": [
+          "harness"
+        ],
+        "execution": "job",
+        "timeout_seconds": 900,
+        "field_specs": {
+          "harness": {
+            "type": "enum-list",
+            "choices": [
+              "claude-code",
+              "codex",
+              "pi",
+              "opencode",
+              "hermes"
+            ],
+            "required": false,
+            "description": "Omit to use native detection for all installed harnesses."
+          }
+        },
+        "field_args": {
+          "harness": [
+            "--harnesses",
+            "{field:harness}"
+          ]
+        },
+        "description": "Install native runtime and wire the selected installed harness, or all detected harnesses."
+      },
+      "doctor": {
+        "args": [
+          "doctor"
+        ],
+        "fields": [],
+        "writes": true,
+        "execution": "job",
+        "timeout_seconds": 300,
+        "description": "Verify wiring and dispatch synthetic events through configured hooks. Hooks may record state or perform their configured actions."
+      },
+      "version": {
+        "args": [
+          "--version"
+        ],
+        "fields": [],
+        "writes": false,
+        "description": "Read the installed native Hooks version."
+      },
+      "uninstall": {
+        "args": [
+          "uninstall"
+        ],
+        "fields": [
+          "keep_runtime",
+          "purge_config"
+        ],
+        "field_specs": {
+          "keep_runtime": {
+            "type": "boolean",
+            "required": false
+          },
+          "purge_config": {
+            "type": "boolean",
+            "required": false,
+            "description": "Remove the native Hooks configuration as well as its wiring."
+          }
+        },
+        "field_args": {
+          "keep_runtime": [
+            "--keep-runtime"
+          ],
+          "purge_config": [
+            "--purge-config"
+          ]
+        },
+        "writes": true,
+        "execution": "job",
+        "timeout_seconds": 900,
+        "description": "Remove native-owned hook wiring using the native uninstaller. Review the optional runtime and configuration cleanup."
+      }
+    },
+    "git": {
+      "state": {
+        "args": [
+          "state",
+          "--cwd",
+          "{config:repo}"
+        ],
+        "writes": false,
+        "fields": []
+      }
+    }
+  }
+}

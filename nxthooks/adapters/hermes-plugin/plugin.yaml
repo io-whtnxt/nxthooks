@@ -1,0 +1,8 @@
+name: nxthooks
+version: "0.1.0"
+description: "NxtOS system-wide hook directory — dispatches ~/.config/nxt/hooks/hooks.d/*.toml into Hermes, so a hook edited once applies to Claude Code, pi, OpenCode, and Hermes alike. Enable per profile via plugins.enabled."
+author: Whtnxt
+hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call

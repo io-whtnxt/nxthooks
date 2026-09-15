@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nxthooks"
+version = "0.1.0"
+description = "One hook directory, five agent harnesses."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Whtnxt" }]
+keywords = ["agent", "hooks", "claude-code", "codex", "opencode"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Quality Assurance",
+]
+# pyyaml is needed to read and write the harness settings files; jsonschema
+# only by `nxthooks install`, which runs once, not by dispatch.
+dependencies = ["pyyaml>=6", "jsonschema>=4"]
+
+[project.scripts]
+nxthooks = "nxthooks.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nxthooks*"]
+
+[tool.setuptools.package-data]
+"nxthooks" = ["builtin/*.toml", "adapters/**/*", "*.toml", "*.yaml", "*.json"]
+"nxthooks._vendor.nxtgrep" = ["patterns/*.conf"]

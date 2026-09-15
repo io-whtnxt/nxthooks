@@ -1,0 +1,30 @@
+entrypoint = "nxthooks"
+configHome = "~/.config/nxt/hooks"
+runtimeRoot = "~/.local/share/nxt/hooks"
+lifecycle = ["install", "verify", "uninstall", "doctor"]
+# The five harnesses NxtHooks wires. Declared so C6 seeds each one's own
+# config before install and requires it back byte-identical after
+# uninstall: without this key the live check has nothing to project into
+# and passes on an empty machine, which is the component that projects most
+# being the one least tested.
+projections = ["claude-code", "codex", "pi", "opencode", "hermes"]
+
+# What `install_runtime` copies verbatim out of the distribution, so C5 can
+# hash both sides. `bin/*-dispatch.sh` and `VERSION` are deliberately absent:
+# the dispatchers are templated with this machine's interpreter and roots, and
+# VERSION is generated, so neither has a source to be identical to.
+[artifacts]
+"lib/nxthooks" = "nxthooks"
+"lib/run_nxthooks.py" = "nxthooks/adapters/run_nxthooks.py"
+
+# C6 found this, which is the point of C6: `install` then `uninstall` hands
+# `.claude/settings.json` back semantically equal but reserialised (the
+# operator's compact nested objects come back expanded, because
+# `_save_cc_settings` writes through a bare `json.dumps`), and hands
+# `.codex/hooks.json` back as `{}` -- a pre-existing foreign hook entry does
+# not survive at all, because that transport generates the whole file rather
+# than converging on its own slots. Both are N2-b, the port onto
+# `nxthooks._vendor.projection`, whose indent-preserving writer and slot-scoped strip
+# exist precisely for this. Named and dated here rather than muted.
+[accepted]
+"C6-foreign-remainder" = { reason = "install/uninstall reserialises .claude/settings.json and drops a foreign entry from .codex/hooks.json; fixed by the N2-b port onto nxthooks._vendor.projection", until = "2026-10-31" }

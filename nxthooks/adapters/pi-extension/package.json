@@ -1,0 +1,7 @@
+{
+  "name": "nxthooks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NxtHooks transport for pi — thin adapter over the NxtHooks dispatcher",
+  "type": "module"
+}
