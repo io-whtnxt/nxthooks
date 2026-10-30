@@ -25,7 +25,6 @@ outside any working repo, holding the one canonical implementation.
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 
 from . import CANONICAL_EVENTS, FAIL_MODES, POLICIES
@@ -33,14 +32,17 @@ from . import CANONICAL_EVENTS, FAIL_MODES, POLICIES
 from .platform import hooks_d as _hooks_d
 
 
-def hooks_d_default() -> Path:
+def hooks_d_default(
+    env: dict | None = None,
+    home: Path | str | None = None,
+) -> Path:
     """Resolved per call, never cached at import.
 
     A module-level constant here read the config home as it stood when the
     module first loaded, which is correct in a one-shot subprocess and wrong
     in anything long-lived -- the installer, the desktop app, a test suite.
     """
-    return _hooks_d()
+    return _hooks_d(env, home)
 
 
 class ManifestError(ValueError):
@@ -66,6 +68,9 @@ def _validate(entry: dict, origin: str) -> dict:
         raise ManifestError(f"{origin}/{name}: policy must be one of {POLICIES}")
     if entry.get("fail", "open") not in FAIL_MODES:
         raise ManifestError(f"{origin}/{name}: fail must be one of {FAIL_MODES}")
+    timeout = entry.get("timeout_ms")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0):
+        raise ManifestError(f"{origin}/{name}: 'timeout_ms' must be a positive integer")
     if "pi_preflight" in entry:
         if not isinstance(entry["pi_preflight"], bool):
             raise ManifestError(f"{origin}/{name}: 'pi_preflight' must be a bool")
@@ -74,7 +79,13 @@ def _validate(entry: dict, origin: str) -> dict:
     return entry
 
 
-def load_manifests(hooks_d: Path | None = None) -> list[dict]:
+def load_manifests(
+    hooks_d: Path | None = None,
+    *,
+    library: Path | None = None,
+    env: dict | None = None,
+    home: Path | str | None = None,
+) -> list[dict]:
     """Every hook that applies, as the resolved builtin < library < user union.
 
     Lazy import: registry.py imports from this module at module scope, so
@@ -87,7 +98,12 @@ def load_manifests(hooks_d: Path | None = None) -> list[dict]:
     """
     from .registry import resolve
 
-    return resolve(hooks_d=hooks_d)[0]
+    return resolve(
+        library=library,
+        hooks_d=hooks_d,
+        env=env,
+        home=home,
+    )[0]
 
 
 def source_path(entry: dict) -> Path:
@@ -121,6 +137,7 @@ NATIVE_TOOL_ALIASES = {
     # Hermes (hermes-agent 0.21.1).
     "terminal": {"bash"},
     "write_file": {"write"},
+    "edit_file": {"edit"},
 }
 
 

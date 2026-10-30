@@ -13,27 +13,47 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
-from . import HARNESSES, __version__
+from . import INSTALLABLE_HARNESSES, __version__, contract
 from . import dispatch as dispatch_mod
 from . import lifecycle
 from .platform import config_dir, data_dir
 
 
+class _PrintContract(argparse.Action):
+    """`--contract`: the JSON a host checks before it relies on this install."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS,
+                         help="print the host contract as JSON and exit")
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(json.dumps(contract.describe()))
+        parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nxthooks", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--contract", action=_PrintContract)
     sub = parser.add_subparsers(dest="command", required=True)
 
     dispatch_mod.register(sub)
 
     p = sub.add_parser("install", help="install runtime + wire all present harnesses")
-    p.add_argument("--harnesses", nargs="*", choices=HARNESSES, help="restrict to these harnesses")
+    p.add_argument(
+        "--harnesses", nargs="*", choices=INSTALLABLE_HARNESSES,
+        help="restrict to these installable harnesses",
+    )
     p.add_argument("--from", dest="source", metavar="PATH",
                    help="package directory to install from; defaults to the "
                         "imported nxthooks, which follows sys.path and so the "
                         "working directory")
+    p.add_argument("--keep-newer", action="store_true",
+                   help="keep an installed runtime whose VERSION is newer than "
+                        "this package instead of replacing it")
     p.set_defaults(func=lifecycle.cmd_install)
 
     p = sub.add_parser("uninstall", help="remove NxtHooks wiring and artifacts")
@@ -82,3 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         # would read as a tool-call veto.
         print(f"nxthooks {args.command} failed: {exc}", file=sys.stderr)
         return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

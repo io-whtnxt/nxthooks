@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from nxthooks.registry import BUILTIN_DIR
-from nxthooks._vendor.nxtlint.install import install_shim
+from nxthooks.engines.nxtlint.install import install_shim
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -40,6 +40,12 @@ def wired(tmp_path):
     )
     (hooks_d / "nxtlint.toml").write_text(body, encoding="utf-8")
     assert tomllib.loads(body)["hook"][0]["source"] == str(shim)
+    # Every other builtin is switched off by name, or the dispatch runs this
+    # machine's own copy of it.
+    for builtin in BUILTIN_DIR.glob("*.toml"):
+        if builtin.name != "nxtlint.toml":
+            off = builtin.read_text(encoding="utf-8").replace("[[hook]]\n", "[[hook]]\nenabled = false\n")
+            (hooks_d / builtin.name).write_text(off, encoding="utf-8")
     return tmp_path
 
 
@@ -47,6 +53,8 @@ def _dispatch(wired, envelope: dict, event: str = "after_tool") -> dict:
     env = dict(os.environ)
     env["XDG_CONFIG_HOME"] = str(wired / "config")
     env["XDG_DATA_HOME"] = str(wired / "data")
+    env["XDG_STATE_HOME"] = str(wired / "state")
+    env["XDG_CACHE_HOME"] = str(wired / "cache")
     proc = subprocess.run(
         [sys.executable, "-m", "nxthooks", "dispatch",
          "--harness", "claude-code", "--event", event, "--out", "json"],
@@ -124,3 +132,17 @@ def test_it_does_not_fire_before_the_tool_runs(wired, tmp_path):
     out = _dispatch(wired, _envelope(subject), event="before_tool")
 
     assert out["context"] == []
+
+
+def test_the_wired_dispatch_runs_nxtlint_and_nothing_of_the_machines(wired, tmp_path):
+    """Builtins always load and name `~/...` sources, so without switching them
+    off these tests ran the developer's real secret-scan and snapshot-save and
+    wrote failures to the real ledger; a stranger machine without them failed."""
+    subject = tmp_path / "unused.py"
+    subject.write_text("import os\n", encoding="utf-8")
+
+    after = _dispatch(wired, _envelope(subject))
+    before = _dispatch(wired, _envelope(subject), event="before_tool")
+
+    assert [hook["hook"] for hook in after["ran"]] == ["nxtlint"]
+    assert before["ran"] == [] and before["unavailable"] == []

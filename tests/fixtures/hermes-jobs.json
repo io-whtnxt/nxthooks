@@ -1,8 +1,0 @@
-{
-  "jobs": [
-    {"id": "a1b2c3", "name": "Whtnxt Blog Pipeline", "profile": "whtnxt-agent", "schedule_display": "0 10 * * 1,3,5", "workdir": "/home/echalupa/.projects/whtnxt-website", "enabled": true, "last_status": "ok"},
-    {"id": "d4e5f6", "name": "Whtnxt Weekly SEO Audit", "profile": "whtnxt-agent", "schedule_display": "0 10 * * 0", "workdir": "/home/echalupa/.projects/whtnxt-website", "enabled": true, "last_status": "ok"},
-    {"id": "0a9b8c", "name": "Texas Land Tax Blog Pipeline", "profile": "texaslandtax", "schedule_display": "0 8 * * 1,3,5", "workdir": "/home/echalupa/.projects/texas-tax-ex-website", "enabled": true, "last_status": "ok"}
-  ],
-  "updated_at": "2026-07-23T08:00:00Z"
-}

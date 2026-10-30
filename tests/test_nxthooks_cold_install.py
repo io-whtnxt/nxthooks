@@ -1,4 +1,3 @@
-import pytest
 """Install into a HOME that has never seen NxtHooks and assert the result.
 
 Every existing NxtHooks test runs against an already-importable package on a
@@ -17,7 +16,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _cold(tmp_path, *args, cwd=REPO):
+def _cold(tmp_path, *args, cwd=REPO, safe_entry=False):
     env = dict(os.environ)
     env["HOME"] = str(tmp_path / "home")
     env["XDG_CONFIG_HOME"] = str(tmp_path / "home" / ".config")
@@ -26,7 +25,7 @@ def _cold(tmp_path, *args, cwd=REPO):
     env.pop("NXTHOOKS_POLICY", None)
     # Relocating HOME also hides Python's *user* site-packages, where this
     # machine happens to keep jsonschema -- a dependency cmd_install acquired
-    # when it started importing nxthooks._vendor.plugins.delivery. A stranger
+    # when it started importing nxtoskit.plugins.delivery. A stranger
     # installing the wheel gets it in the same site-packages as everything
     # else, so losing it here tests pip's install location rather than hook
     # wiring, which is what this file is about.
@@ -45,7 +44,7 @@ def _cold(tmp_path, *args, cwd=REPO):
     env["PATH"] = os.pathsep.join(["/usr/bin", "/bin"])
     (tmp_path / "home").mkdir(parents=True, exist_ok=True)
     return subprocess.run(
-        [sys.executable, "-m", "nxthooks", *args],
+        [sys.executable, *(["-P"] if safe_entry else []), "-m", "nxthooks", *args],
         capture_output=True, text=True, cwd=str(cwd), env=env,
         timeout=120, check=False,
     )
@@ -71,24 +70,6 @@ def _dispatch(tmp_path, payload: str) -> subprocess.CompletedProcess:
     )
 
 
-def _plant_hook_sources(tmp_path):
-    """Materialize the guard scripts every builtin points at.
-
-    `nxthooks install` does not own these — nxtos drops them in ~/.nxtos/bin —
-    so on a machine with no guards at all, verify reports a missing source,
-    which is a real and correctly-reported gap. Planting them is what
-    makes install's exit code a statement about nxthooks' own wiring.
-    """
-    from nxthooks.registry import builtin_manifests
-
-    for entry in builtin_manifests():
-        source = entry["source"]
-        assert source.startswith("~/"), f"builtin source is not HOME-relative: {source}"
-        dest = tmp_path / "home" / source[2:]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text("")
-
-
 def test_a_cold_install_finds_its_own_hooks(tmp_path):
     """Every assertion here must be reachable only through install.
 
@@ -99,7 +80,6 @@ def test_a_cold_install_finds_its_own_hooks(tmp_path):
     `GAPS FOUND` verdict shipped unnoticed. So: assert the exit code, assert
     the runtime landed on disk, and run `list` through the *installed* copy.
     """
-    _plant_hook_sources(tmp_path)
     install = _cold(tmp_path, "install", "--harnesses", "claude-code")
     assert install.returncode == 0, install.stdout + install.stderr
 
@@ -132,7 +112,7 @@ def test_install_seeds_config_where_the_dispatcher_reads_it(tmp_path):
 def test_a_cold_install_provisions_its_builtin_hook(tmp_path):
     proc = _cold(tmp_path, "install", "--harnesses", "claude-code")
     # NxtLint own component dir. It used to be ~/.nxtos/bin, which belongs to
-    # `git` -- see COMPONENT_IDS in nxthooks._vendor.paths.
+    # `git` -- see COMPONENT_IDS in nxtoskit.paths.
     shim = (tmp_path / "home" / ".local" / "share" / "nxt"
             / "lint" / "bin" / "nxtlint-hook.py")
 
@@ -191,86 +171,6 @@ def test_a_cold_install_wires_only_the_events_that_have_hooks(tmp_path):
     assert "claude-code wiring (before_tool)" in verify.stdout
 
 
-def _seed_library(tmp_path):
-    """Run NxtOS's own installer against this cold HOME. Deliberately not
-    `nxthooks install`: the library tier is NxtOS's to provide, and nxthooks
-    may not import nxthooks._vendor to fetch it."""
-    return subprocess.run(
-        [sys.executable, "-m", "nxthooks._vendor.hooks.install"],
-        capture_output=True, text=True, cwd=str(REPO), timeout=120, check=False,
-        env={**os.environ,
-             "HOME": str(tmp_path / "home"),
-             "XDG_DATA_HOME": str(tmp_path / "home" / ".local" / "share")},
-    )
-
-
-@pytest.mark.skip(reason="not applicable to the extracted package: the library tier is NxtOS's to install; this package has no fleet")
-def test_nxtos_installing_the_library_tier_gives_the_machine_its_fleet_hooks(tmp_path):
-    """The library tier's whole point, end to end: NxtOS installs its seven
-    manifests, and NxtHooks -- which may not import nxthooks._vendor -- resolves them
-    and wires the events they declare. Until an installer existed, they were
-    package data nothing read, and a fresh machine silently had one hook.
-    """
-    first = _cold(tmp_path, "install", "--harnesses", "claude-code")
-    assert first.returncode == 0, first.stderr
-    assert _seed_library(tmp_path).returncode == 0
-
-    listing = _cold(tmp_path, "list", cwd=_installed_lib(tmp_path))
-    tiers = {l.split()[0]: l.split()[1] for l in listing.stdout.splitlines()[1:] if l.strip()}
-    assert tiers["nxtgit-guard"] == "library", listing.stdout
-    assert len([n for n, t in tiers.items() if t == "library"]) == 7
-
-    rewire = _cold(tmp_path, "install", "--harnesses", "claude-code")
-    assert rewire.returncode == 0, rewire.stdout + rewire.stderr
-    assert set(_cc_settings(tmp_path)["hooks"]) == {
-        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"
-    }
-
-
-@pytest.mark.skip(reason="not applicable to the extracted package: seeds an NxtOS library tier")
-def test_a_pending_library_source_is_counted_in_the_verdict(tmp_path):
-    """`all wiring resolves.` printed above seven `[pend]` lines contradicts
-    the lines above it, and the reader believes the summary."""
-    _plant_hook_sources(tmp_path)
-    _cold(tmp_path, "install", "--harnesses", "claude-code")
-    _seed_library(tmp_path)
-    _cold(tmp_path, "install", "--harnesses", "claude-code")
-
-    verify = _cold(tmp_path, "verify", cwd=_installed_lib(tmp_path))
-
-    assert verify.returncode == 0, verify.stdout
-    assert (
-        # Six, not seven: nxthooks._vendor.hooks.install now provisions nxtgrep's shim
-        # alongside the manifests, so secret-scan resolves instead of pending.
-        # The six git/claims guards stay pending -- they come from
-        # scripts/install-hook-guards.py, a separate path this does not take
-        # over.
-        "result: all wiring resolves (6 source(s) pending from nxtos)."
-    ) in verify.stdout
-
-
-@pytest.mark.skip(reason="not applicable to the extracted package: seeds an NxtOS library tier")
-def test_a_shadowed_user_hook_is_counted_in_the_verdict(tmp_path):
-    """Same sentence, other half: a dropped user manifest prints `[warn]` and
-    must not be summarised away either."""
-    _plant_hook_sources(tmp_path)
-    _cold(tmp_path, "install", "--harnesses", "claude-code")
-    _seed_library(tmp_path)
-    hooks_d = tmp_path / "home" / ".config" / "nxt" / "hooks" / "hooks.d"
-    hooks_d.mkdir(parents=True, exist_ok=True)
-    (hooks_d / "mine.toml").write_text(
-        '[[hook]]\nname = "nxtgit-guard"\nevents = ["before_tool"]\n'
-        'source = "/tmp/mine.py"\n',
-        encoding="utf-8",
-    )
-    _cold(tmp_path, "install", "--harnesses", "claude-code")
-
-    verify = _cold(tmp_path, "verify", cwd=_installed_lib(tmp_path))
-
-    assert verify.returncode == 0, verify.stdout
-    assert "1 user hook(s) shadowed" in verify.stdout, verify.stdout
-
-
 def test_the_stranger_experience(tmp_path):
     """Install into an empty HOME, then use it. No NxtOS, no config, no
     pre-existing anything. This is the phase's deliverable, stated once.
@@ -300,7 +200,7 @@ def test_the_stranger_experience(tmp_path):
 
     listing = _cold(tmp_path, "list", cwd=_installed_lib(tmp_path))
     names = {l.split()[0] for l in listing.stdout.splitlines()[1:] if l.strip()}
-    assert names == {"nxtlint", "secret-scan"}, listing.stdout
+    assert names == {"nxtlint", "secret-scan", "snapshot-save"}, listing.stdout
 
 
 # ------------------------------------------- every builtin, not just the first
@@ -308,7 +208,7 @@ def test_the_stranger_experience(tmp_path):
 def test_every_builtin_declares_what_provisions_its_source():
     """A builtin whose source nothing writes is a hook that GAPs on a cold
     machine. That was true of `secret-scan` for as long as it existed: the
-    provisioner named exactly one module, `nxthooks._vendor.nxtlint.install`, so
+    provisioner named exactly one module, `nxthooks.engines.nxtlint.install`, so
     NxtGrep shipped its pattern pack, its hook and its installer and a
     stranger still got no secret scanning.
     """
@@ -343,7 +243,6 @@ def test_a_cold_install_refuses_a_known_secret(tmp_path):
     through a real dispatch against the *installed* copy, because that is the
     only thing a stranger runs.
     """
-    _plant_hook_sources(tmp_path)
     install = _cold(tmp_path, "install", "--harnesses", "claude-code")
     assert install.returncode == 0, install.stdout + install.stderr
 
@@ -364,7 +263,6 @@ def test_a_cold_install_refuses_a_known_secret(tmp_path):
 
 def test_a_cold_install_still_allows_clean_content(tmp_path):
     """The other half: a scanner that blocks everything is not a scanner."""
-    _plant_hook_sources(tmp_path)
     _cold(tmp_path, "install", "--harnesses", "claude-code")
 
     payload = json.dumps({
@@ -380,22 +278,24 @@ def test_a_cold_install_still_allows_clean_content(tmp_path):
 def test_provisioning_survives_a_cwd_that_shadows_the_package(tmp_path):
     """`python -m` prepends the working directory to sys.path.
 
-    So a cwd holding any directory named `nxthooks` or `nxthooks._vendor` shadows the
+    So a cwd holding any directory named `nxthooks` or `nxtoskit` shadows the
     real one, and provisioning fails with a ModuleNotFoundError naming a
     module that is installed and importable from everywhere else. Running
     `nxthooks install` from a checkout of its own source is enough -- which is
     exactly how it was found, and it means the failure is likeliest for the
     people most likely to hit it.
     """
-    # A `nxthooks._vendor` that exists but is the wrong one -- an empty package with
+    # A `nxtoskit` that exists but is the wrong one -- an empty package with
     # none of the writers in it. Shadowing `nxthooks` itself is not the case
     # under test: `python -m nxthooks` could not start at all then, whereas
     # the installed console script would be unaffected.
     decoy = tmp_path / "decoy"
-    (decoy / "nxthooks/_vendor").mkdir(parents=True)
-    (decoy / "nxthooks/_vendor" / "__init__.py").write_text("")
+    (decoy / "nxtoskit").mkdir(parents=True)
+    (decoy / "nxtoskit" / "__init__.py").write_text("")
 
-    proc = _cold(tmp_path, "install", "--harnesses", "claude-code", cwd=decoy)
+    # Model the installed console entry; the provisioning child must still
+    # defend itself against this cwd. Do not rely on editable-import fallback.
+    proc = _cold(tmp_path, "install", "--harnesses", "claude-code", cwd=decoy, safe_entry=True)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FAILED to provision" not in proc.stdout, proc.stdout
@@ -404,3 +304,17 @@ def test_provisioning_survives_a_cwd_that_shadows_the_package(tmp_path):
     for entry in builtin_manifests():
         landed = tmp_path / "home" / entry["source"][2:]
         assert landed.is_file(), f"{entry['name']} not provisioned from a shadowing cwd"
+
+
+def test_cold_list_observes_a_corrupted_installed_copy(tmp_path):
+    proc = _cold(tmp_path, "install", "--harnesses", "claude-code")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    installed = _installed_lib(tmp_path) / "nxthooks/builtin/nxtlint.toml"
+    assert installed.is_file()
+    installed.unlink()
+    assert (REPO / "nxthooks/builtin/nxtlint.toml").is_file()
+    listing = _cold(tmp_path, "list", cwd=_installed_lib(tmp_path))
+    assert listing.returncode == 0, listing.stderr
+    names = {line.split()[0] for line in listing.stdout.splitlines()[1:] if line.strip()}
+    assert "nxtlint" not in names
+    assert "secret-scan" in names

@@ -258,3 +258,15 @@ def test_an_unrelated_tool_is_still_not_selected():
     assert not matcher_matches({"matchers": ["Bash"]}, "write_file")
     assert not matcher_matches({"matchers": ["Write"]}, "terminal")
     assert not matcher_matches({"matchers": ["Bash"]}, "read_file")
+
+
+def test_ts_adapters_spawn_the_installer_pinned_interpreter():
+    """A bare python3 can be a pre-3.11 interpreter that cannot import tomllib,
+    which makes the dispatcher fail and the adapter silently allow."""
+    from pathlib import Path
+
+    adapters = Path(__file__).resolve().parent.parent / "nxthooks" / "adapters"
+    for rel in ("pi-extension/index.ts", "opencode-plugin/nxthooks.ts"):
+        text = (adapters / rel).read_text(encoding="utf-8")
+        assert 'path.join(ROOT, "PYTHON")' in text, rel
+        assert '      "python3",' not in text, rel

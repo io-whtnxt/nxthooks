@@ -12,11 +12,11 @@ import pytest
 
 from nxthooks import platform as plat
 from nxthooks.dispatch import _command_for
-from nxthooks._vendor import paths
+from nxthooks import _paths as paths
 
 
 def _reload_with(monkeypatch, windows, env):
-    # `plat` delegates to `nxthooks._vendor.paths` since N1-a; the platform fork lives
+    # `plat` delegates to `nxtoskit.paths` since N1-a; the platform fork lives
     # there, so that is what a Windows test has to flip.
     monkeypatch.setattr(paths, "WINDOWS", windows)
     for key in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):

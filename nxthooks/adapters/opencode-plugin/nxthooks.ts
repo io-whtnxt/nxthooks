@@ -16,13 +16,24 @@
 // Behavior changes land in the dispatcher/hook sources, not here.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
 const ROOT =
   process.env.NXTHOOKS_ROOT || path.join(homedir(), ".local/share/nxt/hooks");
 const RUNNER = path.join(ROOT, "lib", "run_nxthooks.py");
+
+// The dispatcher needs tomllib (3.11+); a bare `python3` can be an older
+// system interpreter, and the failed import resolves null, which allows. The
+// installer records the interpreter it validated.
+const PYTHON = (() => {
+  try {
+    return readFileSync(path.join(ROOT, "PYTHON"), "utf8").trim() || "python3";
+  } catch {
+    return "python3";
+  }
+})();
 
 // A missing runner resolved `null`, and `null` means allow to both handlers
 // below. Fail-open with no signal, on a security layer. It still allows, but
@@ -34,7 +45,7 @@ let runnerNoticeShown = false;
 function runnerMissingNote(): string | null {
   if (runnerNoticeShown) return null;
   runnerNoticeShown = true;
-  return `[nxthooks] runner missing at ${RUNNER}; hooks are NOT running this session. Run: nxtos doctor`;
+  return `[nxthooks] runner missing at ${RUNNER}; hooks are NOT running this session. Run: nxthooks doctor`;
 }
 
 function callDispatcher(envelope: Record<string, unknown>): Promise<any | null> {
@@ -43,7 +54,7 @@ function callDispatcher(envelope: Record<string, unknown>): Promise<any | null> 
   }
   return new Promise((resolve) => {
     const child = spawn(
-      "python3",
+      PYTHON,
       [RUNNER, "dispatch", "--harness", "opencode", "--out", "json"],
       { stdio: ["pipe", "pipe", "ignore"] },
     );
@@ -67,9 +78,31 @@ function callDispatcher(envelope: Record<string, unknown>): Promise<any | null> 
 
 export const NxtHooksPlugin = async ({ directory, worktree }: any) => {
   const root = worktree || directory;
+  const endedSessions = new Set<string>();
 
   return {
-    "chat.message": async (_input: any, output: any) => {
+    event: async ({ event }: any) => {
+      if (event?.type !== "session.deleted") return;
+
+      const info = event?.properties?.info ?? {};
+      const sessionId = String(
+        info?.id ?? event?.properties?.sessionID ?? event?.properties?.sessionId ?? "",
+      );
+      const key = sessionId || String(event?.id ?? "anonymous");
+      if (endedSessions.has(key)) return;
+      endedSessions.add(key);
+
+      await callDispatcher({
+        version: 1,
+        harness: "opencode",
+        event: "session_end",
+        cwd: info?.directory || root,
+        session_id: sessionId,
+        reason: "deleted",
+      });
+    },
+
+    "chat.message": async (input: any, output: any) => {
       try {
         const promptText = (output?.parts ?? [])
           .filter((p: any) => p?.type === "text")
@@ -82,6 +115,7 @@ export const NxtHooksPlugin = async ({ directory, worktree }: any) => {
           harness: "opencode",
           event: "prompt_submit",
           cwd: root,
+          session_id: input?.sessionID ?? output?.message?.sessionID ?? "",
           prompt: promptText,
         });
         if (outcome?.runner_missing) {
@@ -127,6 +161,8 @@ export const NxtHooksPlugin = async ({ directory, worktree }: any) => {
         harness: "opencode",
         event: "before_tool",
         cwd: root,
+        session_id: input?.sessionID ?? "",
+        tool_call_id: input?.callID ?? "",
         tool: String(input?.tool ?? ""),
         args: output?.args ?? {},
       });
@@ -148,6 +184,11 @@ export const NxtHooksPlugin = async ({ directory, worktree }: any) => {
           harness: "opencode",
           event: "after_tool",
           cwd: root,
+          session_id: input?.sessionID ?? "",
+          tool_call_id: input?.callID ?? "",
+          // Completion is observed; no undocumented result body is treated
+          // as proof of success. Owner reconciliation can compare hashes.
+          success: null,
           tool: String(input?.tool ?? ""),
           // `after` carries args on `input`; only `before` carries them on
           // `output` (@opencode-ai/plugin dist/index.d.ts). Reading `output`

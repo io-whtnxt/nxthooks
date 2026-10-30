@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,13 +22,13 @@ def _load_dir(directory: Path, tier: str) -> list[dict]:
             with open(path, "rb") as fh:
                 data = tomllib.load(fh)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            print(f"[nxthooks] skipping {path.name}: {exc}", flush=True)
+            print(f"[nxthooks] skipping {path.name}: {exc}", file=sys.stderr, flush=True)
             continue
         for raw in data.get("hook", []):
             try:
                 entry = _validate(raw, path.name)
             except ManifestError as exc:
-                print(f"[nxthooks] skipping hook: {exc}", flush=True)
+                print(f"[nxthooks] skipping hook: {exc}", file=sys.stderr, flush=True)
                 continue
             entries.append({**entry, "tier": tier, "origin": str(path)})
     return entries
@@ -58,8 +59,11 @@ class Collision:
 def resolve(
     library: Path | None = None,
     hooks_d: Path | None = None,
+    *,
+    env: dict | None = None,
+    home: Path | str | None = None,
 ) -> tuple[list[dict], tuple[Collision, ...]]:
-    root = library if library is not None else library_dir()
+    root = library if library is not None else library_dir(env, home)
     resolved: dict[str, dict] = {e["name"]: e for e in builtin_manifests()}
     collisions: list[Collision] = []
 
@@ -68,7 +72,7 @@ def resolve(
         resolved[entry["name"]] = entry
         library_names.add(entry["name"])
 
-    user_dir = hooks_d if hooks_d is not None else hooks_d_default()
+    user_dir = hooks_d if hooks_d is not None else hooks_d_default(env, home)
     for entry in _load_dir(user_dir, "user"):
         if entry["name"] in library_names:
             collisions.append(

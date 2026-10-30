@@ -1,7 +1,0 @@
-{
-  "dataset": "sample-drafts",
-  "items": [
-    {"key": "bad-cliche", "draft": "Leveraging synergies unlocks potential.", "expect": "low"},
-    {"key": "good-specific", "draft": "I cut trace init from minutes to seconds by stopping a noisy worker.", "expect": "high"}
-  ]
-}

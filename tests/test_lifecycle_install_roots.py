@@ -15,6 +15,14 @@ import json
 from nxthooks import lifecycle
 
 
+ALL_CC_GROUPS = {
+    "session_start": [None],
+    "prompt_submit": [None],
+    "before_tool": [None],
+    "session_end": [None],
+}
+
+
 class _Args:
     harnesses = None
     keep_runtime = True
@@ -60,7 +68,7 @@ def test_a_known_root_narrows_the_strip_and_spares_a_foreign_install(hooks_machi
         json.dumps({"hooks": {"PreToolUse": [{"hooks": [other]}]}})
     )
     root = host.home / "runtime"
-    lifecycle.cc_wire(host, root, {"before_tool": [None]})
+    lifecycle.cc_wire(host, root, ALL_CC_GROUPS)
 
     assert lifecycle._known_roots(host) == (root,)
 
@@ -72,7 +80,7 @@ def test_a_known_root_narrows_the_strip_and_spares_a_foreign_install(hooks_machi
 def test_the_roots_come_out_of_the_ledgers_runtime_field(hooks_machine):
     host = hooks_machine("claude-code", "codex")
     root = host.home / "runtime"
-    lifecycle.cc_wire(host, root, {"before_tool": [None]})
+    lifecycle.cc_wire(host, root, ALL_CC_GROUPS)
     lifecycle.codex_wire(host, root)
 
     assert lifecycle._known_roots(host) == (root,)
@@ -100,7 +108,7 @@ def test_a_recorded_root_is_the_unresolved_one_the_stanza_embeds(hooks_machine):
     link = host.home / "symlinked-runtime"
     link.symlink_to(real)
 
-    lifecycle.cc_wire(host, link, {"before_tool": [None]})
+    lifecycle.cc_wire(host, link, ALL_CC_GROUPS)
     roots = lifecycle._known_roots(host)
 
     assert roots == (link,)

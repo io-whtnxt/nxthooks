@@ -97,6 +97,21 @@ def test_dispatcher_failure_never_blocks(mod):
     assert mod.on_pre_llm_call(user_message="x") is None
 
 
+def test_session_end_dispatches_the_canonical_close_event(mod):
+    mod._fake.outcome = {"verdict": "allow", "reason": "", "context": [], "ran": []}
+
+    assert mod.on_session_end(session_id="s1", reason="shutdown", completed=False) is None
+
+    event, payload = mod._calls[0]
+    assert event == "session_end"
+    assert payload == {
+        "cwd": mod.os.getcwd(),
+        "session_id": "s1",
+        "reason": "shutdown",
+        "completed": False,
+    }
+
+
 def test_register_wires_every_declared_hook():
     """plugin.yaml and register() must not drift apart."""
     m = _load()
@@ -113,7 +128,9 @@ def test_register_wires_every_declared_hook():
     declared = (PLUGIN.parent / "plugin.yaml").read_text()
     for name in registered:
         assert f"- {name}" in declared, f"{name} registered but not declared in plugin.yaml"
-    assert registered == ["pre_llm_call", "pre_tool_call", "post_tool_call"]
+    assert registered == [
+        "pre_llm_call", "pre_tool_call", "post_tool_call", "on_session_end"
+    ]
     assert sections == ["nxthooks.session"]
 
 

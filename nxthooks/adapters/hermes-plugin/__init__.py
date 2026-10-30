@@ -100,7 +100,7 @@ def _runner_missing_note() -> str:
         return ""
     _runner_notice_shown = True
     return (f"[nxthooks] runner missing at {RUNNER}; hooks are NOT running "
-            "this session. Run: nxtos doctor")
+            "this session. Run: nxthooks doctor")
 
 
 def _context_text(outcome: dict) -> str:
@@ -150,6 +150,19 @@ def on_post_tool_call(**kwargs: Any) -> None:
     return None
 
 
+def on_session_end(**kwargs: Any) -> None:
+    """Forward Hermes's real session boundary to the canonical dispatcher."""
+    payload: dict[str, Any] = {
+        "cwd": os.getcwd(),
+        "session_id": kwargs.get("session_id") or "",
+    }
+    for name in ("reason", "completed", "interrupted", "model", "platform"):
+        if name in kwargs:
+            payload[name] = kwargs[name]
+    _dispatch("session_end", payload)
+    return None
+
+
 def _session_section(session_info: Mapping[str, Any]) -> str:
     outcome = _dispatch("session_start", {
         "cwd": os.getcwd(),
@@ -164,4 +177,5 @@ def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("post_tool_call", on_post_tool_call)
+    ctx.register_hook("on_session_end", on_session_end)
     ctx.register_system_prompt_section("nxthooks.session", _session_section)

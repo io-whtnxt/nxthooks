@@ -32,7 +32,7 @@ def test_main_reports_and_exits_nonzero_on_an_uncaught_exception(monkeypatch, ca
 
 def test_main_reports_a_subprocess_timeout(monkeypatch, capsys):
     def _raise(args):
-        raise subprocess.TimeoutExpired(cmd=["python3", "-m", "nxthooks._vendor.nxtlint.install"], timeout=30)
+        raise subprocess.TimeoutExpired(cmd=["python3", "-m", "nxthooks.engines.nxtlint.install"], timeout=30)
 
     monkeypatch.setattr(lifecycle, "cmd_install", _raise)
 

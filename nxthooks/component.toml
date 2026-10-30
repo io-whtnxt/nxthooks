@@ -1,4 +1,6 @@
 entrypoint = "nxthooks"
+# The version of what a host may rely on, not of this release: see contract.py.
+contractVersion = "1.0"
 configHome = "~/.config/nxt/hooks"
 runtimeRoot = "~/.local/share/nxt/hooks"
 lifecycle = ["install", "verify", "uninstall", "doctor"]
@@ -24,7 +26,7 @@ projections = ["claude-code", "codex", "pi", "opencode", "hermes"]
 # `.codex/hooks.json` back as `{}` -- a pre-existing foreign hook entry does
 # not survive at all, because that transport generates the whole file rather
 # than converging on its own slots. Both are N2-b, the port onto
-# `nxthooks._vendor.projection`, whose indent-preserving writer and slot-scoped strip
+# `nxthooks.projection`, whose indent-preserving writer and slot-scoped strip
 # exist precisely for this. Named and dated here rather than muted.
 [accepted]
-"C6-foreign-remainder" = { reason = "install/uninstall reserialises .claude/settings.json and drops a foreign entry from .codex/hooks.json; fixed by the N2-b port onto nxthooks._vendor.projection", until = "2026-10-31" }
+"C6-foreign-remainder" = { reason = "install/uninstall reserialises .claude/settings.json and drops a foreign entry from .codex/hooks.json; fixed by the N2-b port onto nxthooks.projection", until = "2026-10-31" }

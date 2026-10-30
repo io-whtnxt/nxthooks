@@ -1,39 +1,51 @@
-"""Test-wide isolation for NxtOS's own roots.
+"""Test-wide isolation for the roots NxtHooks resolves.
 
-`nxthooks._vendor.paths` resolves to real per-user locations (XDG state, config and
-data under the developer's home). Every test that builds a server or a
-TrustStore against a tmp_path workspace would otherwise write session
-transcripts, a notification database and trust grants into the developer's
-actual state directory, and would read back whatever a previous test left
-there. Giving the process a tmp home makes the isolation the same as
-tmp_path's.
+`nxthooks._paths` resolves to real per-user locations (XDG state, config and
+data under the developer's home). A test that installs, dispatches or adopts
+against those would write into the developer's actual hook directory and read
+back whatever a previous test left there. Giving the process a tmp home makes
+the isolation the same as tmp_path's.
 
-The second fixture is the one that matters since N1. Resolving a path now
-*moves* whatever the operator has at the matching legacy location onto it, so
-a test that resolves against the real home does not merely read the
-developer's state, it migrates it. That is not a thing a test suite may do,
-and "it didn't happen this run" is not an assurance -- so it is refused
-rather than avoided, naming the path, and a test that trips it is a test that
-forgot to inject a home.
+The adoption guard is the one that matters. Resolving a path *moves* whatever
+the operator has at the matching legacy location onto it, so a test that
+resolves against the real home does not merely read the developer's state, it
+migrates it. That is not a thing a test suite may do, and "it didn't happen
+this run" is not an assurance -- so it is refused rather than avoided, naming
+the path, and a test that trips it is a test that forgot to inject a home.
 """
+import contextlib
 import os
 from pathlib import Path
 
 import pytest
 
-from nxthooks._vendor import paths
+from nxthooks import _paths as paths
 
 _REAL_HOME = Path.home()
 
 
+@pytest.fixture
+def closing():
+    """An ExitStack for resources a test opens: `closing.callback(thing.close)`.
+    Unwinds at teardown, newest first, even when the test failed."""
+    with contextlib.ExitStack() as stack:
+        yield stack
+
+
 @pytest.fixture(autouse=True)
-def _isolated_nxtos_state(tmp_path_factory, monkeypatch):
-    # `Path.home`, not the HOME variable, because a resolver reached through
-    # the app server (`load_agents`, `scan`, `properties`) is handed
-    # `Path.home()` by its caller rather than a test's tmp_path, and since N1
-    # resolving one of those *moves* what it finds. Patching the variable
-    # instead would also move this interpreter's user site-packages, which
-    # every subprocess test then fails to import out of.
+def _no_inherited_git_repository(monkeypatch):
+    """A suite started from a git hook inherits GIT_DIR, GIT_INDEX_FILE and
+    friends; a test's git calls in its scratch repo would then act on the
+    real one."""
+    for key in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path_factory, monkeypatch):
+    # `Path.home`, not the HOME variable: patching the variable would also
+    # move this interpreter's user site-packages, which every subprocess test
+    # then fails to import out of.
     fake_home = tmp_path_factory.mktemp("home")
     developers_home = os.environ.get("HOME")
 
@@ -56,15 +68,15 @@ def _isolated_nxtos_state(tmp_path_factory, monkeypatch):
                 # test aimed at their real ~/.claude.
                 "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME"):
         monkeypatch.delenv(key, raising=False)
-    # Both adoption passes run at most once per (source, target) per process.
-    # Two tests can reuse a workspace path, so the caches are cleared here or
-    # the second one silently skips the adoption it is asserting on.
+    # Adoption runs at most once per (source, target) per process. Two tests
+    # can reuse a workspace path, so the cache is cleared here or the second
+    # one silently skips the adoption it is asserting on.
     paths._adopted.clear()
 
 
 @pytest.fixture(autouse=True)
 def _never_adopt_the_developers_own_state(monkeypatch):
-    real_adopt = paths.adopt
+    real_adopt = paths._adopt
 
     def guarded(legacy, target, *args, **kwargs):
         for candidate in (Path(legacy), Path(target)):
@@ -76,11 +88,11 @@ def _never_adopt_the_developers_own_state(monkeypatch):
                 )
         return real_adopt(legacy, target, *args, **kwargs)
 
-    monkeypatch.setattr(paths, "adopt", guarded)
+    monkeypatch.setattr(paths, "_adopt", guarded)
 
 
 # ---------------------------------------------------------------------------
-# NxtHooks: a throwaway machine to project into
+# A throwaway machine to project into
 # ---------------------------------------------------------------------------
 
 #: One file per harness that the harness itself writes. A *directory* is never
@@ -93,6 +105,7 @@ HARNESS_SENTINELS = {
     "pi": (".pi/settings.json", "{}\n"),
     "opencode": (".config/opencode/opencode.json", "{}\n"),
     "hermes": (".hermes/config.yaml", "model:\n  name: local\n"),
+    "muse": (".config/muse/settings.json", '{"schema_version": 1}\n'),
 }
 
 

@@ -1,7 +1,0 @@
----
-type: NxtOS Operation
-title: Op
-meta_os: test
-operating_rhythm: test
-runtime: claude-code
----

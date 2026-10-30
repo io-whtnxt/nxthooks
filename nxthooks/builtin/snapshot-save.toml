@@ -1,0 +1,20 @@
+# Working-tree undo snapshot before file-write tools; never refuses a write.
+#
+# The shadow repo lives outside every working tree, so the project's own
+# .git, branches, hooks, and NxtGit claims never see it. Saves are
+# debounced to one per project per window and skip scratch paths, and a
+# successful save stays silent so the safety net costs no context.
+#
+# before_tool and `fail = "open"`: this must run before the write lands --
+# and a snapshotter that has itself broken must not take the agent's work
+# down with it. A failed save still announces itself through the
+# dispatcher's fail-open path, which is where a broken safety net belongs.
+[[hook]]
+name = "snapshot-save"
+events = ["before_tool"]
+matchers = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+source = "~/.local/state/nxt/git/snapshots/bin/snapshot-save-hook.py"
+provision = "nxthooks.engines.snapshots.install"
+policy = "advise"
+fail = "open"
+timeout_ms = 15000

@@ -2,7 +2,7 @@
 
 Work item 4 of the release spec. Two things kept it from shipping:
 
-  - the pattern pack lived at `nxthooks._vendor/hooks/builtin/nxtgrep/patterns/`,
+  - the pattern pack lived at `nxtoskit/hooks/builtin/nxtgrep/patterns/`,
     inside the NxtOS runtime hook tree rather than the package, so no wheel
     carried the file the scanner reads
   - the installer was a 513-line script outside the package that also edited
@@ -10,7 +10,7 @@ Work item 4 of the release spec. Two things kept it from shipping:
     all of which NxtHooks now does, for every harness rather than Claude Code
     alone
 
-The pack is in-package now and the installer is `nxthooks._vendor.nxtgrep.install`,
+The pack is in-package now and the installer is `nxthooks.engines.nxtgrep.install`,
 the same shape as nxtlint's.
 
 Fixture secrets are assembled at runtime rather than written as literals.
@@ -28,11 +28,11 @@ from pathlib import Path
 
 import pytest
 
-from nxthooks._vendor.nxtgrep import hook as grep_hook
-from nxthooks._vendor.nxtgrep.install import SHIM_NAME, default_bin, install_shim
+from nxthooks.engines.nxtgrep import hook as grep_hook
+from nxthooks.engines.nxtgrep.install import SHIM_NAME, default_bin, install_shim
 
 REPO = Path(__file__).resolve().parents[1]
-HOOK = REPO / "nxthooks/_vendor" / "nxtgrep" / "hook.py"
+HOOK = REPO / "nxthooks" / "engines" / "nxtgrep" / "hook.py"
 
 #: Assembled, not written. See the module docstring.
 FAKE_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
@@ -61,22 +61,14 @@ def test_the_pattern_pack_is_inside_the_package():
     )
 
 
-def test_the_pack_is_not_still_read_from_the_nxtos_hook_tree():
-    stale = REPO / "nxthooks/_vendor" / "hooks" / "builtin" / "nxtgrep" / "patterns"
-    assert not stale.exists(), (
-        "the pack is back in the runtime hook tree; a wheel will not carry it"
-    )
-
-
-@pytest.mark.skip(reason="not applicable to the extracted package: copies nxtoskit/ as a unit; the package is already vendored here")
 def test_a_vendored_copy_carries_its_own_pack(tmp_path):
     """The extraction check: copy only the package, and it still scans."""
     root = tmp_path / "vendor"
     root.mkdir()
-    shutil.copytree(REPO / "nxthooks/_vendor", root / "nxthooks/_vendor",
+    shutil.copytree(REPO / "nxthooks", root / "nxthooks",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     proc = subprocess.run(
-        [sys.executable, str(root / "nxthooks/_vendor" / "nxtgrep" / "hook.py")],
+        [sys.executable, str(root / "nxthooks" / "engines" / "nxtgrep" / "hook.py")],
         input=json.dumps({"tool_name": "Write",
                           "tool_input": {"content": FAKE_AWS_KEY}}),
         capture_output=True, text=True, cwd="/tmp",
@@ -123,7 +115,7 @@ def test_install_writes_an_executable_shim(tmp_path):
     target = install_shim(tmp_path / "bin")
     assert target.name == SHIM_NAME
     assert target.stat().st_mode & 0o111
-    assert "from nxthooks._vendor.nxtgrep.hook import main" in target.read_text()
+    assert "from nxthooks.engines.nxtgrep.hook import main" in target.read_text()
 
 
 def test_the_shim_is_a_shim_not_a_copy(tmp_path):
@@ -133,5 +125,5 @@ def test_the_shim_is_a_shim_not_a_copy(tmp_path):
 
 
 def test_the_shim_lands_in_nxtgreps_own_component_dir():
-    """Not ~/.nxtos/bin, which nxthooks._vendor.paths maps to the `git` component."""
+    """Not ~/.nxtos/bin, which nxtoskit.paths maps to the `git` component."""
     assert default_bin().parts[-2:] == ("grep", "bin"), default_bin()

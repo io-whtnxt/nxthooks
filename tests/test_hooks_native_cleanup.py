@@ -40,55 +40,61 @@ def test_purge_preserves_canonical_hook_sources_and_unrelated_files(hooks_machin
     assert not (host.root() / "lib/nxthooks/cli.py").exists()
 
 
-@pytest.mark.skip(reason="not applicable to the extracted package: the _framework copy is not written by a vendored build")
-def test_installed_dispatch_has_its_own_framework_primitives(hooks_machine):
-    host = hooks_machine("claude-code")
-    assert lifecycle.cmd_install(_args(), host) == 0
-    framework = host.root() / "lib" / lifecycle.FRAMEWORK_DIR / "nxthooks/_vendor"
-    assert (framework / "paths.py").is_file()
-    assert (framework / "projection" / "__init__.py").is_file()
-
-
-@pytest.mark.skip(reason="not applicable to the extracted package: there is no partial nxtoskit to outrank anything")
-def test_the_shipped_framework_is_not_placed_where_it_outranks_a_real_nxtoskit(hooks_machine):
-    """What ships with the runtime is a *partial* `nxthooks._vendor`: paths and
-    projection, nothing else. `run_nxthooks.py` exposes the whole CLI, and
-    `cmd_install` and `cmd_uninstall` both import `nxthooks._vendor.plugins.delivery`,
-    so at `lib/nxthooks._vendor` ahead of `sys.path` this copy turned both commands
-    into `ModuleNotFoundError` on a machine with nxthooks._vendor fully installed.
-
-    Asserted structurally, on where the launcher puts the directory, and
-    deliberately not by importing `nxthooks._vendor.plugins` and seeing whether it
-    resolves. That import succeeds here whatever the launcher does: this
-    checkout installs nxthooks._vendor editable, and a setuptools editable install
-    registers a `sys.meta_path` finder, which is consulted before `sys.path`
-    is looked at at all. An import probe passes on a developer's machine and
-    proves nothing about an operator's.
-    """
+def test_the_installed_runtime_carries_everything_dispatch_imports(hooks_machine):
+    """No `_framework` copy: the package ships its own paths and projection, so
+    the one directory `run_nxthooks.py` puts on sys.path is the whole runtime."""
     host = hooks_machine("claude-code")
     assert lifecycle.cmd_install(_args(), host) == 0
     lib = host.root() / "lib"
-    assert not (lib / "nxthooks/_vendor").exists()
+    assert (lib / "nxthooks" / "_paths.py").is_file()
+    assert (lib / "nxthooks" / "projection" / "__init__.py").is_file()
+    assert not (lib / lifecycle.LEGACY_FRAMEWORK_DIR).exists()
+    assert not (lib / "nxtoskit").exists()
 
     # The real launcher, not a copy of what it is believed to do: `run_path`
     # executes its module body while leaving `__name__` something other than
     # `__main__`, so `main()` never runs.
     probe = subprocess.run(
         [sys.executable, "-c",
-         f"import runpy, sys, json, sysconfig; runpy.run_path({str(lib / 'run_nxthooks.py')!r}); "
-         "print(json.dumps({'path': sys.path, 'purelib': sysconfig.get_paths()['purelib']}))"],
-        cwd=Path(lifecycle.__file__).resolve().parents[1],
-        capture_output=True, text=True)
+         f"import runpy, sys, json; before = list(sys.path); runpy.run_path({str(lib / 'run_nxthooks.py')!r}); "
+         "print(json.dumps([p for p in sys.path if p not in before]))"],
+        cwd=host.home, capture_output=True, text=True)
     assert probe.returncode == 0, probe.stderr
-    resolved = json.loads(probe.stdout.strip().splitlines()[-1])
+    assert json.loads(probe.stdout.strip().splitlines()[-1]) == [str(lib)]
 
-    framework = str(lib / lifecycle.FRAMEWORK_DIR)
-    assert framework in resolved["path"]
-    assert resolved["path"].index(framework) > resolved["path"].index(resolved["purelib"]), (
-        "the shipped framework must sit behind the real site-packages, not ahead of it")
-    # And the runtime's own package still has to win, which is why the two
-    # directories cannot be the same one.
-    assert resolved["path"].index(str(lib)) < resolved["path"].index(resolved["purelib"])
+
+def test_an_old_framework_copy_is_removed_by_the_next_install(hooks_machine):
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    stale = host.root() / "lib" / lifecycle.LEGACY_FRAMEWORK_DIR / "nxtoskit"
+    stale.mkdir(parents=True)
+    (stale / "paths.py").write_text("# an earlier install put this here\n")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    assert not stale.parent.exists()
+
+
+def test_reinstalling_never_leaves_the_runtime_missing(hooks_machine, monkeypatch):
+    """Staged beside the live copy and renamed in. The old `rmtree` + `copytree`
+    left `lib/nxthooks` absent for the length of the copy, and a fail-closed
+    guard dispatched in that window blocked every tool call."""
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    live = host.root() / "lib" / "nxthooks"
+    seen = []
+    real = lifecycle.shutil.copytree
+
+    def watched(src, dst, *a, **k):
+        result = real(src, dst, *a, **k)
+        if Path(dst).parent == live.parent and Path(dst) != live:
+            seen.append((live / "cli.py").is_file())
+        return result
+
+    monkeypatch.setattr(lifecycle.shutil, "copytree", watched)
+    assert lifecycle.cmd_install(_args(), host) == 0
+    assert seen == [True]
+    assert not live.with_name("nxthooks.staging").exists()
+    assert not live.with_name("nxthooks.previous").exists()
+    assert not live.with_name(".nxthooks.link").exists()
 
 
 def test_the_lifecycle_lock_is_not_in_the_world_writable_temp_dir(hooks_machine):

@@ -13,7 +13,7 @@ if [ ! -f "$RUNNER" ]; then
     stamp="{{STATE}}/runner-missing.stamp"
     if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +60 2>/dev/null)" ]; then
         mkdir -p "{{STATE}}" 2>/dev/null
-        printf '[nxthooks] runner missing at %s; hooks are not running. Run: nxtos doctor\n' \
+        printf '[nxthooks] runner missing at %s; hooks are not running. Run: nxthooks doctor\n' \
             "$RUNNER" >&2
         : > "$stamp" 2>/dev/null
     fi

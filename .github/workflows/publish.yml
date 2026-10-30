@@ -32,6 +32,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build
+      # A tag that disagrees with the version in the package would publish a
+      # number nobody tagged; refuse it before building.
+      - name: tag matches the package version
+        shell: bash
+        run: |
+          VERSION=$(python -c "import re; print(re.search(r'^__version__ = \"(.+)\"', open('nxthooks/__init__.py').read(), re.M).group(1))")
+          test "$GITHUB_REF_NAME" = "v$VERSION" || { echo "tag $GITHUB_REF_NAME != v$VERSION"; exit 1; }
       - run: python -m build
       # Fails the release rather than publishing a package whose metadata
       # PyPI would render wrong and which cannot be replaced in place.

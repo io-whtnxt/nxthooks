@@ -8,7 +8,7 @@ version bump breaks us.
 
 import pytest
 
-from nxthooks._vendor.nxtlint.engine import lint_paths
+from nxthooks.engines.nxtlint.engine import lint_paths
 
 pytestmark = pytest.mark.skipif(
     __import__("shutil").which("ruff") is None, reason="ruff not installed"

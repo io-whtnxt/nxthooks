@@ -9,11 +9,12 @@ from pathlib import Path
 import pytest
 
 from nxthooks import HARNESSES
+from nxthooks.cli import build_parser
 from nxthooks.config import DEFAULTS
-from nxthooks import lifecycle
-from nxthooks.dispatch import aggregate, emit_native_codex, normalize, run_hook
+from nxthooks import capability, lifecycle
+from nxthooks.dispatch import aggregate, cmd_dispatch, emit_native_codex, normalize, run_hook
 from nxthooks.manifest import matcher_matches
-from nxthooks._vendor.projection import NotDetected
+from nxthooks.projection import NotDetected
 
 
 def _entry(name: str, source: Path, event: str, **extra) -> dict:
@@ -27,15 +28,50 @@ def _entry(name: str, source: Path, event: str, **extra) -> dict:
     }
 
 
-def test_capability_matrix_names_all_five_harnesses_and_honest_gaps():
-    assert HARNESSES == ("claude-code", "codex", "pi", "opencode", "hermes")
+def test_muse_dispatch_routes_through_the_claude_code_native_emitter(monkeypatch, capsys):
+    """Muse Code declares the same settings.json hooks shape as Claude Code
+    (SessionStart/UserPromptSubmit/PreToolUse, identical nesting) and its
+    blocking contract -- exit 2, stderr as the reason -- was verified
+    against Muse Code 1.3.0 (see muse-dispatch.sh). cmd_dispatch reuses
+    emit_native_cc for it rather than the generic json-dump fallback, which
+    the other unregistered-native harnesses (pi, opencode, hermes) still
+    get. With no hooks configured, emit_native_cc prints nothing on allow;
+    the generic fallback would print the outcome JSON -- that's the
+    observable difference this test pins."""
+    import argparse
+    import io
+
+    from nxthooks import dispatch
+
+    monkeypatch.setattr(dispatch, "load_manifests", lambda: [])
+    monkeypatch.setattr(dispatch, "load_config", lambda cwd=None: {})
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"cwd": "", "prompt": "hi"})))
+
+    args = argparse.Namespace(
+        harness="muse", event="prompt_submit", event_positional="",
+        out="native", preflight=False,
+    )
+    assert cmd_dispatch(args) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_muse_dispatches_but_is_not_offered_to_the_unverified_installer():
+    dispatch = build_parser().parse_args([
+        "dispatch", "--harness", "muse", "--event", "prompt_submit",
+    ])
+    assert dispatch.harness == "muse"
+
+    with pytest.raises(SystemExit) as refused:
+        build_parser().parse_args(["install", "--harnesses", "muse"])
+    assert refused.value.code == 2
+
+def test_capability_matrix_names_all_harnesses_and_honest_gaps():
+    assert HARNESSES == ("claude-code", "codex", "pi", "opencode", "hermes", "muse", "pool")
     for harness in HARNESSES:
         assert harness in lifecycle.CAPABILITY_MATRIX
-    assert "before_tool block       block        block*" in lifecycle.CAPABILITY_MATRIX
-    # Was `"Manual fallback"`, naming a paragraph rather than the claim it
-    # carried. The claim is that Codex's pre-tool coverage is strong but not
-    # total, and that the matrix says so instead of quietly implying it.
-    assert "hosted or specialised tool paths can route around it" in lifecycle.CAPABILITY_MATRIX
+    assert capability.CELLS["before_tool block"][1] == "block*"
+    assert "Manual fallback" in lifecycle.CAPABILITY_MATRIX
+    assert all(row[-1] == "unsupported; CLI" for row in capability.CELLS.values())
 
 
 def test_the_config_never_enables_a_transport_on_its_own():
@@ -177,6 +213,15 @@ def test_apply_patch_selects_existing_file_edit_manifests():
     entry = {"matchers": ["Write", "Edit", "NotebookEdit"]}
     assert matcher_matches(entry, "apply_patch") is True
     assert matcher_matches({"matchers": ["Bash"]}, "apply_patch") is False
+
+
+def test_muse_write_file_and_edit_file_select_file_edit_manifests():
+    entry = {"matchers": ["Write", "Edit", "MultiEdit", "NotebookEdit"]}
+    assert matcher_matches(entry, "write_file") is True
+    assert matcher_matches(entry, "edit_file") is True
+    assert matcher_matches(entry, "Write") is True
+    assert matcher_matches({"matchers": ["Bash"]}, "write_file") is False
+    assert matcher_matches({"matchers": ["Write"]}, "bash") is False
 
 
 def test_codex_native_outputs_are_event_specific(capsys):

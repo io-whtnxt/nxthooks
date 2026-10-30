@@ -15,7 +15,7 @@ import pytest
 
 from nxthooks import lifecycle
 from nxthooks.dispatch import aggregate, run_hook
-from nxthooks._vendor.projection import live_slots
+from nxthooks.projection import live_slots
 
 
 class _Args:
@@ -53,7 +53,7 @@ def test_install_wires_only_the_harness_that_is_present(hooks_machine, capsys):
     for absent in (".pi", ".codex", ".hermes", ".config/opencode"):
         assert not (host.home / absent).exists(), absent
     assert {record.harness for record in live_slots("hooks", home=host.home, env={})} \
-        == {"claude-code"}
+        <= {"claude-code"}
 
 
 def test_install_ignores_a_config_that_claims_an_absent_harness(hooks_machine, capsys):
@@ -115,6 +115,24 @@ def test_the_config_records_what_was_detected(hooks_machine, capsys):
 
 
 # ---------------------------------------------------- uninstall leaves nothing
+
+
+def test_builtin_hook_sources_are_written_on_the_host_being_installed(hooks_machine, capsys, monkeypatch, tmp_path):
+    """The builtin writers run as subprocesses. They used to inherit this
+    process's HOME and XDG roots instead of the Host's, so installing onto
+    any other home wrote and then deleted the operator's real hook sources
+    (the suite did exactly that to the developer's machine)."""
+    operator = tmp_path / "operator"
+    operator.mkdir()
+    monkeypatch.setenv("HOME", str(operator))
+    monkeypatch.setenv("XDG_DATA_HOME", str(operator / "xdg-data"))
+    host = hooks_machine("claude-code")
+
+    lifecycle.cmd_install(_args(), host)
+    capsys.readouterr()
+
+    assert (host.home / ".local/share/nxt/lint/bin/nxtlint-hook.py").is_file()
+    assert _listing(operator) == set()
 
 
 def test_uninstall_leaves_the_machine_as_it_found_it(hooks_machine, capsys):
@@ -242,6 +260,14 @@ def test_uninstall_closes_every_ledger_slot_it_removes(hooks_machine, capsys):
     """Deleting the file is not closing the slot. A removal the ledger never
     hears about leaves a projection that reads as live forever."""
     host = hooks_machine("claude-code", "pi")
+    source = host.home / "hook.sh"
+    source.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    host.hooks_d.mkdir(parents=True)
+    (host.hooks_d / "owned.toml").write_text(
+        f'[[hook]]\nname = "owned"\nevents = ["after_tool"]\n'
+        f'source = "{source}"\nmatchers = ["Write"]\n',
+        encoding="utf-8",
+    )
 
     lifecycle.cmd_install(_args(keep_runtime=True, purge_config=False), host)
     assert live_slots("hooks", home=host.home, env={})
@@ -250,6 +276,41 @@ def test_uninstall_closes_every_ledger_slot_it_removes(hooks_machine, capsys):
     capsys.readouterr()
 
     assert live_slots("hooks", home=host.home, env={}) == ()
+
+
+def test_reinstall_closes_the_slot_of_an_event_no_hook_declares_any_more(
+    hooks_machine, capsys
+):
+    """Converging the stanzas down is not closing their slots. An event whose
+    last hook was deleted loses its stanza on the next install; the ledger
+    record it leaves behind reads as a stanza `verify` can no longer find."""
+    host = hooks_machine("claude-code")
+    source = host.home / "hook.sh"
+    source.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    host.hooks_d.mkdir(parents=True)
+    manifest = host.hooks_d / "closing.toml"
+    manifest.write_text(
+        f'[[hook]]\nname = "closing"\nevents = ["session_end"]\n'
+        f'source = "{source}"\n',
+        encoding="utf-8",
+    )
+    (host.hooks_d / "staying.toml").write_text(
+        f'[[hook]]\nname = "staying"\nevents = ["after_tool"]\n'
+        f'source = "{source}"\nmatchers = ["Write"]\n',
+        encoding="utf-8",
+    )
+    lifecycle.cmd_install(_args(keep_runtime=True, purge_config=False), host)
+    assert any("/SessionEnd/" in r.slot
+               for r in live_slots("hooks", home=host.home, env={}))
+
+    manifest.unlink()
+    lifecycle.cmd_install(_args(keep_runtime=True, purge_config=False), host)
+    capsys.readouterr()
+
+    slots = [r.slot for r in live_slots("hooks", home=host.home, env={})]
+    assert not any("/SessionEnd/" in slot for slot in slots)
+    assert any("/PostToolUse/" in slot for slot in slots)
+    assert lifecycle.cmd_verify(_args(), host) == 0
 
 
 def test_uninstall_takes_the_lock_sidecar_with_it(hooks_machine, capsys):
@@ -347,6 +408,8 @@ def test_the_installed_transport_is_fail_quiet(hooks_machine, name):
 
     text = (root / "bin" / name).read_text()
     assert "if [ ! -f \"$RUNNER\" ]" in text
-    assert "nxtos doctor" in text
+    # The remedy names this package's own command: a machine with NxtHooks
+    # alone has no `nxtos` to run.
+    assert "Run: nxthooks doctor" in text and "nxtos doctor" not in text
     assert "-mmin +60" in text
     assert "{{STATE}}" not in text

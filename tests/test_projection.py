@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from nxthooks._vendor.projection import (
+from nxthooks.projection import (
     ALTERED,
     INTACT,
     MISSING,
@@ -32,8 +32,8 @@ from nxthooks._vendor.projection import (
     orphans,
     write,
 )
-from nxthooks._vendor.projection.verify import verify
-from nxthooks._vendor.projection.envelope import (
+from nxthooks.projection.verify import verify
+from nxthooks.projection.envelope import (
     FORM_ENV_PREFIX,
     LEGACY_ENV_PREFIX,
     Marker,
@@ -271,7 +271,7 @@ def test_no_sentinel_is_a_directory_nxtos_creates_itself(tmp_path: Path):
     """`~/.pi/agent/extensions` and `~/.config/opencode/plugins` are made by
     NxtHooks' own `copytree`. A sentinel on one lets NxtOS detect the harness
     it manufactured two minutes ago, which is the bug detect exists to end."""
-    from nxthooks._vendor.projection.detect import HARNESSES
+    from nxthooks.projection.detect import HARNESSES
 
     nxtos_creates = (".pi/agent/extensions", ".config/opencode/plugins",
                      ".hermes/plugins", ".claude/hooks")
@@ -290,7 +290,7 @@ def test_no_sentinel_is_a_directory_nxtos_creates_itself(tmp_path: Path):
 def test_every_harness_records_what_it_was_verified_against():
     """A harness whose writer has never been driven must not silently be
     treated as safe for an in-file key."""
-    from nxthooks._vendor.projection.detect import HARNESSES
+    from nxthooks.projection.detect import HARNESSES
 
     for spec in HARNESSES.values():
         assert spec.tolerates_unknown_keys is False, spec.id
@@ -891,9 +891,9 @@ def test_a_record_stamps_the_shape_that_wrote_it(home: Path, runtime: Path):
     """N7: a projection embeds an absolute runtime path, so which shape wrote
     a slot is the difference between a stanza pointing at a venv and one
     pointing at whatever branch a checkout has out."""
-    from nxthooks._vendor import paths
+    from nxthooks import _paths as paths
 
-    assert wire(home, runtime).shape == paths.install_shape().shape
+    assert wire(home, runtime).shape == paths.install_shape()
 
 
 def test_a_rebuilt_record_claims_no_shape(home: Path, runtime: Path):
@@ -913,14 +913,14 @@ def test_a_rebuilt_record_claims_no_shape(home: Path, runtime: Path):
 # ----------------------------------------------------------------- the shape
 
 
-@pytest.mark.skip(reason="not applicable to the extracted package: walks the NxtOS component tree")
 def test_the_library_imports_no_component():
-    """A dependency of components, never the reverse. The moment this library
-    imports NxtHooks, NxtHooks cannot be uninstalled without it."""
+    """NxtHooks owns this library now, so the rule runs the other way: it may
+    not reach up into NxtOS or a sibling component. That is what lets NxtHooks
+    ship without them."""
     import ast
 
-    package = Path(__file__).resolve().parent.parent / "nxthooks/_vendor" / "projection"
-    forbidden = {"nxthooks", "nxtskills", "nxtmcp", "nxtwiki"}
+    package = Path(__file__).resolve().parent.parent / "nxthooks" / "projection"
+    forbidden = {"nxtoskit", "nxtskills", "nxtmcp", "nxtwiki"}
     for module in sorted(package.glob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
         for node in ast.walk(tree):

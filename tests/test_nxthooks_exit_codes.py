@@ -16,6 +16,7 @@ dispatcher that predated the codex harness. Every tool call came back
 "Blocked by hook" with an argparse usage message as the reason.
 """
 
+import os
 import subprocess
 import sys
 
@@ -67,11 +68,13 @@ def test_help_still_exits_zero():
     assert _run("--help").returncode == 0
 
 
-def test_a_valid_invocation_is_unaffected():
+def test_a_valid_invocation_is_unaffected(tmp_path):
+    # The machine's own hooks and failure ledger stay out of it.
+    env = {**os.environ, **{f"XDG_{root}_HOME": str(tmp_path / root.lower()) for root in ("CONFIG", "DATA", "STATE", "CACHE")}}
     proc = subprocess.run(
         [sys.executable, "-m", "nxthooks", "dispatch",
          "--harness", "claude-code", "--event", "before_tool", "--out", "json"],
         input='{"cwd":"/tmp","session_id":"exit-code-test","tool_name":"Read","tool_input":{}}',
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env=env,
     )
     assert proc.returncode == 0, proc.stderr

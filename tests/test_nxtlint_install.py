@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from nxthooks._vendor.nxtlint.install import SHIM_NAME, install_shim
+from nxthooks.engines.nxtlint.install import SHIM_NAME, install_shim
 
 pytestmark = pytest.mark.skipif(
     __import__("shutil").which("ruff") is None, reason="ruff not installed"

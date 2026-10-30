@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from nxthooks._vendor.nxtlint.cli import main
+from nxthooks.engines.nxtlint.cli import main
 
 pytestmark = pytest.mark.skipif(
     __import__("shutil").which("ruff") is None, reason="ruff not installed"
@@ -103,7 +103,7 @@ def test_module_is_runnable_as_a_script(tmp_path):
     path.write_text("import os\n", encoding="utf-8")
 
     proc = subprocess.run(
-        [sys.executable, "-m", "nxthooks._vendor.nxtlint.cli", str(path)],
+        [sys.executable, "-m", "nxthooks.engines.nxtlint.cli", str(path)],
         capture_output=True, text=True, timeout=30, check=False,
     )
 

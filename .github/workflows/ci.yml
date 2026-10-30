@@ -8,16 +8,17 @@ on:
 
 jobs:
   test:
-    # Both operating systems on purpose. Everything in this package was
-    # developed and verified on one macOS machine; the harnesses it wires run
-    # on Linux at least as often, and a path or permission assumption that
-    # only holds on a Mac would otherwise reach a user before it reaches us.
+    # Both operating systems on purpose: the harnesses this package wires run
+    # on Linux at least as often as on macOS, and a path or permission
+    # assumption that only holds on one of them should reach CI before it
+    # reaches a user.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.14"]
+        # Every minor `requires-python` admits, oldest to newest.
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,19 +26,25 @@ jobs:
           python-version: ${{ matrix.python }}
       # ruff is not a dependency: NxtLint shells out to it and is silent when
       # it is absent, which is deliberate. Installing it here is what makes
-      # the lint hook's tests run rather than skip.
-      - run: pip install -e . pytest ruff
+      # the lint hook's tests run rather than skip. `build` is for the test
+      # that checks what a wheel actually contains.
+      - run: pip install -e . pytest ruff build
       - run: pytest -q
       # The claim the README makes, exercised rather than asserted: install
       # into a scratch HOME, then confirm the secret scanner refuses a
-      # known-format credential.
+      # known-format credential and the contract answers.
       - name: cold install and block a credential
         shell: bash
         run: |
           export HOME="$(mktemp -d)"
+          nxthooks --contract
           nxthooks install --harnesses claude-code
           nxthooks list
+          nxthooks doctor
+          test ! -e "$HOME/.nxtos"
           KEY="AKIA""IOSFODNN7EXAMPLE"
-          VERDICT=$(printf '{"version":1,"harness":"claude-code","event":"before_tool","cwd":"%s","session_id":"ci","tool":"Write","tool_input":{"content":"k = %s"}}' "$HOME" "$KEY"             | nxthooks dispatch --harness claude-code --out json             | python -c "import json,sys; print(json.load(sys.stdin)['verdict'])")
+          VERDICT=$(printf '{"version":1,"harness":"claude-code","event":"before_tool","cwd":"%s","session_id":"ci","tool":"Write","tool_input":{"content":"k = %s"}}' "$HOME" "$KEY" \
+            | nxthooks dispatch --harness claude-code --out json \
+            | python -c "import json,sys; print(json.load(sys.stdin)['verdict'])")
           echo "verdict: $VERDICT"
           test "$VERDICT" = "block"

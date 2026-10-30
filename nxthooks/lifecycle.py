@@ -1,7 +1,7 @@
 """NxtHooks lifecycle: install / uninstall / verify / doctor.
 
 Everything NxtHooks writes into a file it does not own goes through
-`nxthooks._vendor.projection`. That is not a refactor for tidiness; three concrete
+`nxthooks.projection`. That is not a refactor for tidiness; three concrete
 defects lived in the serialiser this replaces.
 
 **Presence, never config.** `cmd_install` used to select harnesses from
@@ -39,15 +39,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from nxthooks._vendor import paths
-from nxthooks._vendor.projection import (
+from . import _paths as paths
+from .projection import (
     FORM_COMMENT_LINE,
     FORM_ENV_PREFIX,
     FORM_MARKER_FILE,
@@ -63,22 +65,25 @@ from nxthooks._vendor.projection import (
     parse_command_marker,
     stamp_command,
 )
-from nxthooks._vendor.projection.envelope import (
+from .projection.envelope import (
     LEGACY_ENV_PREFIX,
     MARKER_FILE_NAME,
     build,
     is_legacy_command,
 )
-from nxthooks._vendor.projection.ledger import UNWIRE, WIRE, append as ledger_append, live_slots
-from nxthooks._vendor.projection.orphans import runtime_of, walk_commands
-from nxthooks._vendor.projection.verify import ALTERED, INTACT, MISSING, verify as verify_slots
+from .projection.ledger import UNWIRE, WIRE, append as ledger_append, live_slots
+from .projection.orphans import runtime_of, walk_commands
+from .projection.verify import ALTERED, INTACT, MISSING, verify as verify_slots
 
-from . import HARNESSES, __version__
+from . import HARNESSES, INSTALLABLE_HARNESSES, __version__
+from .capability import CAPABILITY_MATRIX
 from .operation_lock import exclusive_lifecycle
+from .delivery import deliver, withdraw
+from .contract import version_key
 from .config import load_config, resolve_root, user_config_path
-from .manifest import load_manifests
+from .manifest import harness_enabled, load_manifests
 from .registry import builtin_manifests, render_collisions
-from .platform import COMPONENT, cache_dir, config_dir, state_dir
+from .platform import COMPONENT, cache_dir, config_dir, data_dir, state_dir
 
 #: What NxtHooks 0.1 wrote instead of a marker. Recognised on unwire through
 #: 0.4 so an upgrade can still clean up after the writer it replaced.
@@ -90,6 +95,13 @@ EVENT_TO_CC = {
     "before_tool": "PreToolUse",
     "after_tool": "PostToolUse",
 }
+
+EVENT_TO_CC_CLOSE = {"session_end": "SessionEnd"}
+#: Claude Code starts subagents inside the session, so session_start never
+#: reaches them. Kept out of EVENT_TO_CC because Codex derives its map from it
+#: and has no such event.
+EVENT_TO_CC_SUBAGENT = {"subagent_start": "SubagentStart"}
+EVENT_TO_CC_ALL = {**EVENT_TO_CC, **EVENT_TO_CC_SUBAGENT, **EVENT_TO_CC_CLOSE}
 
 EVENT_TO_CODEX = {
     **EVENT_TO_CC,
@@ -119,20 +131,14 @@ def _source_provenance(src: Path) -> str:
 
     A checkout is the ambiguous case, so the branch is part of the answer.
     """
-    try:
-        inside = subprocess.run(
-            ["git", "-C", str(src), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        if inside != "true":
-            return str(src)
-        branch = subprocess.run(
-            ["git", "-C", str(src), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        return f"{src} (git checkout, branch {branch})" if branch else str(src)
-    except (OSError, subprocess.SubprocessError):
+    from ._safe_git import run_git  # install-time only; the dispatch hot path never needs it
+
+    inside = run_git(["rev-parse", "--is-inside-work-tree"], src, timeout=5)
+    if inside.outcome != "ok" or inside.text.strip() != "true":
         return str(src)
+    branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], src, timeout=5)
+    name = branch.text.strip() if branch.outcome == "ok" else ""
+    return f"{src} (git checkout, branch {name})" if name else str(src)
 
 
 def _python() -> str:
@@ -143,7 +149,7 @@ def _python() -> str:
 
 
 #: The pane over this CLI, installed by `nxthooks install` and removed by
-#: `nxthooks uninstall`. See `nxthooks._vendor.plugins.delivery` for why it travels
+#: `nxthooks uninstall`. See `nxthooks.delivery` for why it travels
 #: with the component instead of with the host.
 PLUGIN_MANIFEST = Path(__file__).resolve().parent / "plugin.yaml"
 PLUGIN_ID = "nxthooks"
@@ -224,6 +230,10 @@ class Host:
         return cache_dir(self.env, self.home)
 
     @property
+    def library_root(self) -> Path:
+        return data_dir(self.env, self.home) / "library"
+
+    @property
     def hooks_d(self) -> Path:
         return self.config_dir / "hooks.d"
 
@@ -248,10 +258,10 @@ class Host:
 #: config dir and a second `uninstall --purge-config` still needs the list.
 CREATED_PATHS = "created-paths"
 
-#: Where the partial `nxthooks._vendor` the runtime carries lives, under `lib/`. Its
-#: own directory rather than `lib/nxthooks._vendor` so it can be appended to
-#: `sys.path` instead of prepended -- see `install_runtime`.
-FRAMEWORK_DIR = "_framework"
+#: Where an older NxtOS-bundled install put a partial `nxtoskit` under `lib/`. Nothing
+#: writes it now; `install_runtime` removes it and `uninstall` still honours an
+#: old inventory that lists files inside it.
+LEGACY_FRAMEWORK_DIR = "_framework"
 
 #: What `install` wrote and `uninstall` reads to know which files are ours.
 RUNTIME_INVENTORY = ".nxthooks-runtime.json"
@@ -470,14 +480,22 @@ def _require_present(host: Host, harness_id: str) -> Detection:
     return detection
 
 
-def _source_state(entry: dict) -> str:
+def _source_path(raw: str, host: Host) -> Path:
+    """A manifest source on the machine being installed onto: `~` is the
+    host's home, never this process's (see `config.resolve_root`)."""
+    if raw == "~" or raw.startswith("~/"):
+        return host.home / raw[2:]
+    return Path(raw)
+
+
+def _source_state(entry: dict, host: Host) -> str:
     """`installed` | `pending` | `missing` for one hook's implementation."""
-    if Path(os.path.expanduser(entry["source"])).is_file():
+    if _source_path(entry["source"], host).is_file():
         return "installed"
     return "pending" if entry.get("provider") else "missing"
 
 
-def _check_source(entry: dict) -> bool:
+def _check_source(entry: dict, host: Host) -> bool:
     """A missing hook source is only ever this component's failure when
     nothing else claims it.
 
@@ -491,8 +509,8 @@ def _check_source(entry: dict) -> bool:
     answer for, and still fails loudly.
     """
     label = f"hook '{entry['name']}' source"
-    src = Path(os.path.expanduser(entry["source"]))
-    state = _source_state(entry)
+    src = _source_path(entry["source"], host)
+    state = _source_state(entry, host)
     if state == "installed":
         return _check(label, True, str(src))
     if state == "pending":
@@ -503,7 +521,9 @@ def _check_source(entry: dict) -> bool:
 
 
 
-def matcher_groups_for(event: str, host: Host | None = None) -> list[str | None]:
+def matcher_groups_for(
+    event: str, host: Host | None = None, harness: str = "claude-code"
+) -> list[str | None]:
     """Tool-name matchers declared by the live hooks for one event.
 
     Scoping the harness-side stanza to the tools that actually have a hook
@@ -518,13 +538,19 @@ def matcher_groups_for(event: str, host: Host | None = None) -> list[str | None]
     A blanket `[None]` fallback for the empty case wired a match-all stanza for
     an event with nothing behind it, which is exactly what this scoping exists
     to prevent.
+
+    A hook switched off for `harness` contributes nothing: a matcher-less hook
+    disabled for Claude Code used to widen Claude Code's stanza to every tool.
     """
     groups: set[str] = set()
     match_all = False
-    for entry in load_manifests(host.hooks_d if host else None):
+    for entry in load_manifests(
+        host.hooks_d if host else None,
+        library=host.library_root if host else None,
+    ):
         if event not in (entry.get("events") or []):
             continue
-        if not entry.get("enabled", True):
+        if not entry.get("enabled", True) or not harness_enabled(entry, harness):
             continue
         matchers = entry.get("matchers") or []
         if matchers:
@@ -544,9 +570,9 @@ def wiring_groups(host: Host | None = None) -> dict[str, list[str | None]]:
     them, and nothing if none does.
     """
     groups: dict[str, list[str | None]] = {}
-    for canon in EVENT_TO_CC:
+    for canon in EVENT_TO_CC_ALL:
         declared = matcher_groups_for(canon, host)
-        if canon in ("session_start", "prompt_submit"):
+        if canon in ("session_start", "subagent_start", "prompt_submit", "session_end"):
             groups[canon] = [None] if declared else []
         else:
             groups[canon] = declared
@@ -557,9 +583,11 @@ def wiring_groups(host: Host | None = None) -> dict[str, list[str | None]]:
 #: the tool has already run, so there is nothing to tell the user is pending.
 _CC_STATUS = {
     "session_start": "NxtHooks session context...",
+    "subagent_start": "",
     "prompt_submit": "Running NxtHooks checks...",
     "before_tool": "Running NxtHooks guards...",
     "after_tool": "",
+    "session_end": "",
 }
 
 
@@ -577,7 +605,7 @@ def _cc_plan(root: Path, groups_by_event: dict[str, list[str | None]]):
     """
     script = root / "bin" / "cc-dispatch.sh"
     plan = []
-    for canon, cc_event in EVENT_TO_CC.items():
+    for canon, cc_event in EVENT_TO_CC_ALL.items():
         for matcher in groups_by_event.get(canon) or []:
             plan.append((cc_event, matcher, canon, _CC_STATUS.get(canon, "")))
     return script, plan
@@ -586,8 +614,14 @@ def _cc_plan(root: Path, groups_by_event: dict[str, list[str | None]]):
 def _record_slots(host: Host, harness: str, file: Path, doc: dict, script: Path,
                   outcome) -> int:
     """One ledger record per stanza that carries our marker, keyed on the
-    pointer it actually landed at in the document we just wrote."""
+    pointer it actually landed at in the document we just wrote.
+
+    A live record whose slot is not in that document is closed: converging the
+    stanzas down removes them from the file, and a record left open would read
+    to `verify` as a stanza that went missing.
+    """
     written = 0
+    landed: set[str] = set()
     for pointer, command in walk_commands(doc):
         marker = parse_command_marker(command)
         if marker is None or marker.component != COMPONENT:
@@ -604,13 +638,17 @@ def _record_slots(host: Host, harness: str, file: Path, doc: dict, script: Path,
             ),
             home=host.home, env=host.env,
         )
+        landed.add(pointer)
         written += 1
+    _unrecord_slots(host, harness, file, outcome, keep=landed)
     return written
 
 
-def _unrecord_slots(host: Host, harness: str, file: Path, outcome) -> None:
+def _unrecord_slots(host: Host, harness: str, file: Path, outcome,
+                    keep: frozenset[str] | set[str] = frozenset()) -> None:
     for record in live_slots(COMPONENT, home=host.home, env=host.env):
-        if record.harness != harness or record.file != str(file):
+        if (record.harness != harness or record.file != str(file)
+                or record.slot in keep):
             continue
         ledger_append(
             Record(
@@ -819,7 +857,7 @@ def _record_owned(host: Host, harness: str, file: Path, slot: Path, form: str,
     )
 
 
-def _hook_sources_inside(lib: Path) -> list[Path]:
+def _hook_sources_inside(lib: Path, host: Host) -> list[Path]:
     """Live manifest sources that physically live under `lib`.
 
     Nothing should put a hook source inside the directory install replaces,
@@ -833,7 +871,7 @@ def _hook_sources_inside(lib: Path) -> list[Path]:
         raw = entry.get("source") or ""
         if not raw:
             continue
-        src = Path(os.path.expanduser(raw))
+        src = _source_path(raw, host)
         if not src.is_file():
             continue
         try:
@@ -844,19 +882,33 @@ def _hook_sources_inside(lib: Path) -> list[Path]:
     return found
 
 
-def _provision_builtin_hooks() -> list[str]:
+#: The variables that decide where a builtin writer puts its source. They come
+#: from the Host, never from this process: a writer that inherited them would
+#: provision whatever home is running the installer instead of the one being
+#: installed onto.
+_PLACEMENT_ENV = frozenset({
+    "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+    "NXT_CONFIG_HOME", "NXT_DATA_HOME", "NXT_STATE_HOME", "NXT_CACHE_HOME", "NXTOS_STATE_HOME",
+})
+
+
+def _provision_builtin_hooks(host: Host, importable_root: Path, uninstall: bool = False) -> list[str]:
     """Materialize the file(s) each builtin manifest's `source` points at.
 
-    The shim writers live in nxthooks._vendor, and nxthooks may not import nxthooks._vendor --
-    that import direction is what keeps this package shippable standalone. So
-    this knows a writer only by the module name its own manifest declares, and
-    runs it as a subprocess; a missing or failing writer is reported here,
-    never swallowed, because a silent skip recreates the exact defect this
-    exists to close: a curated builtin tier that GAPs on a cold machine
-    because install never wrote what its own manifest points at.
+    The shim writers ship in this package (`nxthooks.engines`) and are run as
+    subprocesses by the module name each builtin manifest declares. A missing
+    or failing writer is reported here, never swallowed, because a silent skip
+    recreates the exact defect this exists to close: a curated builtin tier that
+    GAPs on a cold machine because install never wrote what its own manifest
+    points at.
+
+    `importable_root` is the directory the writers are imported from, and it
+    is the *installed runtime's* `lib/`: the shim a writer leaves behind records
+    where the package is, so it has to record the copy that stays on the
+    machine rather than the checkout or wheel `install` happened to run from.
 
     Driven by the manifests rather than by a hardcoded module list. It named
-    `nxthooks._vendor.nxtlint.install` and nothing else, so adding `secret-scan` to
+    the NxtLint writer and nothing else, so adding `secret-scan` to
     the builtin tier would have wired a hook whose source nothing writes --
     a second copy of the same bug, added while fixing the first.
     """
@@ -869,19 +921,17 @@ def _provision_builtin_hooks() -> list[str]:
                 "`provision` module; nothing will write its source"
             )
             continue
-        # The writer must be imported out of the same tree this process is
-        # running from, and neither default gets there: cwd-on-sys.path picks
-        # up any directory that merely shares a name (running `install` from a
-        # checkout of its own source is enough), and site-packages picks up
-        # whatever was installed last, which on a dogfood machine is some
-        # other worktree. So: `-P` to drop cwd, and PYTHONPATH pinned to this
-        # package's parent, which is the importable root in both layouts --
-        # `<repo>/` next to `nxthooks._vendor/`, and `<site-packages>/` for the
-        # vendored `nxthooks._vendor`.
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(_pkg_dir().parent)
+        # `-P` drops cwd from sys.path, which would otherwise pick up any
+        # directory that merely shares a name (running `install` from a
+        # checkout of its own source is enough), and PYTHONPATH pins the one
+        # tree the writer may import from, so site-packages cannot supply
+        # whatever was installed last.
+        env = {key: value for key, value in os.environ.items() if key not in _PLACEMENT_ENV}
+        env.update({key: value for key, value in host.env.items() if key in _PLACEMENT_ENV})
+        env["HOME"] = str(host.home)
+        env["PYTHONPATH"] = str(importable_root)
         proc = subprocess.run(
-            [_python(), "-P", "-m", str(module)],
+            [_python(), "-P", "-m", str(module), *(["--uninstall"] if uninstall else [])],
             capture_output=True, text=True, check=False, timeout=30, env=env,
         )
         if proc.returncode != 0:
@@ -898,6 +948,114 @@ def _provision_builtin_hooks() -> list[str]:
 # ---------------------------------------------------------------- commands
 
 
+def _newer_installed_runtime(root: Path) -> str:
+    """The version of the runtime already at `root` when it is newer than this
+    package, else "". Asked only under `--keep-newer`, which the NxtOS bundle
+    passes so an older bundled NxtHooks does not downgrade a newer standalone
+    install. A plain `nxthooks install` is the repair path and always
+    overwrites: VERSION is a file the same user can write, so it cannot be what
+    lets a tampered runtime survive a reinstall."""
+    try:
+        installed = (root / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return installed if version_key(installed) > version_key(__version__) else ""
+
+
+#: POSIX makes `lib/nxthooks` a symlink to a versioned sibling and switches
+#: it with one `os.replace`. Windows cannot rely on symlinks and keeps a real
+#: directory, swapped with a rename pair.
+_ATOMIC_LINK = os.name != "nt"
+
+#: `lib/.nxthooks-<version>-<token>`: one installed runtime, live while
+#: `lib/nxthooks` points at it. Not an identifier, so never importable itself.
+_RUNTIME_PREFIX = ".nxthooks-"
+#: The symlink staged beside `lib/nxthooks` and renamed over it.
+_RUNTIME_LINK = ".nxthooks.link"
+
+
+def _discard(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _sweep_interrupted_swap(lib: Path) -> None:
+    """Undo whatever a killed install left beside the live runtime.
+
+    A kill between moving a real directory aside and putting its replacement
+    in leaves `lib/nxthooks` missing and `nxthooks.previous` holding the only
+    copy, rescued hook sources included: it goes back first. Then every
+    staging name that is not the live target is removed.
+    """
+    previous = lib.with_name(lib.name + ".previous")
+    if not os.path.lexists(lib) and previous.is_dir():
+        previous.rename(lib)
+    live = lib.resolve() if lib.is_symlink() else None
+    for entry in lib.parent.iterdir():
+        ours = entry.name.startswith(_RUNTIME_PREFIX) or entry.name in (
+            _RUNTIME_LINK, lib.name + ".staging", previous.name)
+        if ours and (entry.is_symlink() or entry.resolve() != live):
+            _discard(entry)
+
+
+def _stage_runtime(src_pkg: Path, lib: Path, host: Host) -> Path:
+    """Copy the package beside the live runtime, with every hook source that
+    lives inside the live runtime already copied in: from here on nothing the
+    swap could lose is held only in memory."""
+    name = (f"{_RUNTIME_PREFIX}{__version__}-{secrets.token_hex(4)}" if _ATOMIC_LINK
+            else lib.name + ".staging")
+    staged = lib.with_name(name)
+    try:
+        shutil.copytree(src_pkg, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        if lib.exists():
+            live = lib.resolve()
+            for src in _hook_sources_inside(lib, host):
+                dest = staged / src.resolve().relative_to(live)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                dest.chmod(0o755)
+    except BaseException:
+        _discard(staged)
+        raise
+    return staged
+
+
+def _switch_runtime(lib: Path, staged: Path) -> None:
+    """Make `staged` the live runtime, restoring the old one on any failure.
+
+    POSIX: one `os.replace` of a symlink, so a dispatch finds the old runtime
+    or the new one and never neither; the builtins are fail-open, and a
+    dispatch that cannot import the runtime runs unscanned. A real directory
+    an earlier install left is moved aside once, for the length of that one
+    replace. Windows: the rename pair. The retired runtime is removed only
+    after the switch succeeded.
+    """
+    previous = lib.with_name(lib.name + ".previous")
+    retired = lib.resolve() if lib.is_symlink() else None
+    link = lib.with_name(_RUNTIME_LINK)
+    try:
+        if _ATOMIC_LINK:
+            os.symlink(staged.name, link, target_is_directory=True)
+        if retired is None and lib.exists():
+            lib.rename(previous)
+            retired = previous
+        if _ATOMIC_LINK:
+            os.replace(link, lib)
+        else:
+            staged.rename(lib)
+    except BaseException:
+        if retired == previous and not os.path.lexists(lib):
+            previous.rename(lib)
+        for leftover in (link, staged):
+            if os.path.lexists(leftover):
+                _discard(leftover)
+        raise
+    if retired is not None:
+        _discard(retired)
+
+
 def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
     root = host.root(cfg)
     lib = root / "lib" / "nxthooks"
@@ -906,45 +1064,14 @@ def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
     made += make_dir(host, root / "lib")
 
     src_pkg = Path(source).resolve() if source else _pkg_dir()
-    rescued: list[tuple[Path, bytes]] = []
-    if lib.exists():
-        rescued = [(p, p.read_bytes()) for p in _hook_sources_inside(lib)]
-        shutil.rmtree(lib)
-    shutil.copytree(src_pkg, lib, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    for path, blob in rescued:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(blob)
-        path.chmod(0o755)
+    _sweep_interrupted_swap(lib)
+    _switch_runtime(lib, _stage_runtime(src_pkg, lib, host))
 
-    # Dispatch imports the shared path and projection primitives. Ship them
-    # with the runtime so a harness does not depend on the installer's
-    # site-packages.
-    #
-    # Under `_framework/`, and appended to `sys.path` rather than prepended,
-    # because what ships here is a *partial* `nxthooks._vendor`: paths and projection
-    # only. `run_nxthooks.py` exposes the whole CLI, and `cmd_install` and
-    # `cmd_uninstall` both import `nxthooks._vendor.plugins.delivery`. Sitting this
-    # copy at `lib/nxthooks._vendor` shadowed a complete installation and turned
-    # those two commands into `ModuleNotFoundError` on a machine where
-    # nxthooks._vendor was fully present. A real one now wins whenever there is one,
-    # and this remains the fallback it was meant to be.
-    # A vendored build carries paths and projection inside the package, so the
-    # `copytree` of `lib/nxthooks/` above has already shipped them and there is
-    # no partial copy to place or shadow. `io-whtnxt/nxthooks` is that build;
-    # this repo is not, and both must work from one source.
-    framework: Path | None = None
-    if not (src_pkg / "_vendor").is_dir():
-        import nxthooks._vendor.projection
-
-        framework = root / "lib" / FRAMEWORK_DIR / "nxthooks/_vendor"
-        if framework.exists():
-            shutil.rmtree(framework)
-        framework.mkdir(parents=True)
-        shared = Path(paths.__file__).parent
-        for name in ("__init__.py", "paths.py"):
-            shutil.copy2(shared / name, framework / name)
-        shutil.copytree(Path(nxthooks._vendor.projection.__file__).parent, framework / "projection",
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    # The partial `nxtoskit` an earlier install placed beside the runtime is
+    # dead weight now that the package carries what it needs.
+    legacy_framework = root / "lib" / LEGACY_FRAMEWORK_DIR
+    if legacy_framework.exists():
+        shutil.rmtree(legacy_framework)
 
     shutil.copy2(src_pkg / "adapters" / "run_nxthooks.py", root / "lib" / "run_nxthooks.py")
 
@@ -960,18 +1087,14 @@ def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
         target.chmod(0o755)
 
     (root / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
+    (root / "PYTHON").write_text(_python() + "\n", encoding="utf-8")
     # The inventory uninstall removes from, written by the install that put
     # each file there. Without it uninstall was an `rmtree` of the whole root,
     # which took anything the operator had put beside the runtime with it.
     owned = [str((lib / path.relative_to(src_pkg)).relative_to(root))
              for path in src_pkg.rglob("*")
              if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"]
-    # `framework` exists only on a non-vendored build; on a vendored one the
-    # `src_pkg` walk above already listed those files, because they live
-    # inside the package.
-    if framework is not None:
-        owned += [str(path.relative_to(root)) for path in framework.rglob("*") if path.is_file()]
-    owned += ["lib/run_nxthooks.py", "bin/cc-dispatch.sh", "bin/codex-dispatch.sh", "VERSION"]
+    owned += ["lib/run_nxthooks.py", "bin/cc-dispatch.sh", "bin/codex-dispatch.sh", "VERSION", "PYTHON"]
     (root / RUNTIME_INVENTORY).write_text(
         json.dumps({"version": 1, "files": sorted(owned)}), encoding="utf-8")
     # The ledger's own directory. `ledger.append` builds it with `mkdir
@@ -1051,7 +1174,7 @@ def install_opencode_transport(host: Host, root: Path) -> tuple[Path, bool]:
 
 SEED_CONFIG = """\
 # NxtHooks canonical config — edited by hand or by the NxtOS UI; both are
-# first-class. Schema: the NxtOS component-config spec
+# first-class. Schema: CONFIG_SCHEMA in the nxthooks package (config.py).
 
 [meta]
 version = 1
@@ -1156,7 +1279,7 @@ def present_harnesses(host: Host) -> tuple[list[str], dict[str, Detection]]:
     """
     detections = {name: detect(name, home=host.home, env=host.env,
                                path_lookup=host.path_lookup)
-                  for name in HARNESSES}
+                  for name in INSTALLABLE_HARNESSES}
     return [name for name, d in detections.items() if d.present], detections
 
 
@@ -1183,7 +1306,7 @@ def cmd_install(args, host: Host | None = None) -> int:
     explicit = list(args.harnesses or [])
     harnesses = explicit or present
 
-    for name in HARNESSES:
+    for name in INSTALLABLE_HARNESSES:
         mark = "present" if detections[name].present else "absent "
         print(f"detected  {mark}   {name:12} {detections[name].reason}")
     for name in explicit:
@@ -1191,13 +1314,19 @@ def cmd_install(args, host: Host | None = None) -> int:
             print(f"WARNING   {name} was named explicitly but was not detected; "
                   f"wiring it will create {detections[name].root}")
 
-    for line in _provision_builtin_hooks():
-        print(line)
-
     source = Path(args.source).resolve() if getattr(args, "source", None) else _pkg_dir()
     print(f"source              {_source_provenance(source)}")
-    root = install_runtime(host, cfg, source=source)
-    print(f"runtime installed   {root}")
+    root = host.root(cfg)
+    newer = _newer_installed_runtime(root) if getattr(args, "keep_newer", False) else ""
+    if newer:
+        print(f"runtime kept        {root} (installed {newer} is newer than {__version__}; "
+              "--keep-newer. `nxthooks install` without it replaces the runtime)")
+    else:
+        root = install_runtime(host, cfg, source=source)
+        print(f"runtime installed   {root}")
+
+    for line in _provision_builtin_hooks(host, root / "lib"):
+        print(line)
 
     declare_harnesses(host, harnesses)
     for name in seed_manifests(host):
@@ -1229,18 +1358,7 @@ def cmd_install(args, host: Host | None = None) -> int:
     # machine without NxtHooks has no NxtHooks pane (N4-c-1); until now the
     # manifest sat in the host package and the pane appeared whether or not
     # this command had ever run.
-    # Imported here, not at module scope. `install_runtime` copies this whole
-    # package to `<root>/lib` and the harness transports run it from there
-    # through `run_nxthooks.py`, which imports `cli` and therefore this module
-    # on *every* hook dispatch. `nxthooks._vendor.plugins.delivery` pulls in the
-    # manifest loader and jsonschema behind it, and a dispatch running under a
-    # sandboxed HOME loses the user site-packages that provide it -- measured,
-    # not hypothetical: every synthetic dispatch in `nxthooks doctor` died with
-    # ModuleNotFoundError the moment this sat at the top of the file. Install
-    # is the one path that needs it and the one path that can afford it.
-    from nxthooks._vendor.plugins.delivery import deliver
-
-    written, problem = deliver(PLUGIN_MANIFEST, host.home)
+    written, problem = deliver(PLUGIN_MANIFEST, PLUGIN_ID, host.home, host.env)
     print(f"pane not installed  {problem}" if problem
           else f"pane installed      {written}")
 
@@ -1315,9 +1433,9 @@ def _remove_locks(host: Host, files) -> None:
             lock.unlink()
 
 
-#: The four files the runtime owns outside its two package directories.
+#: The five files the runtime owns outside its two package directories.
 _RUNTIME_TOPLEVEL = ("lib/run_nxthooks.py", "bin/cc-dispatch.sh",
-                     "bin/codex-dispatch.sh", "VERSION")
+                     "bin/codex-dispatch.sh", "VERSION", "PYTHON")
 
 
 def _remove_runtime(root: Path, known: bool) -> bool:
@@ -1359,7 +1477,7 @@ def _remove_runtime(root: Path, known: bool) -> bool:
                 or ".." in Path(relative).parts:
             raise ValueError("Invalid native runtime inventory path")
         if relative not in _RUNTIME_TOPLEVEL and not relative.startswith(
-                ("lib/nxthooks/", f"lib/{FRAMEWORK_DIR}/nxthooks._vendor/")):
+                ("lib/nxthooks/", f"lib/{LEGACY_FRAMEWORK_DIR}/nxtoskit/")):
             raise ValueError("Unexpected native runtime inventory path")
         path = root / relative
         if not path.parent.resolve().is_relative_to(root.resolve()):
@@ -1386,11 +1504,33 @@ def _remove_runtime(root: Path, known: bool) -> bool:
                 path.rmdir()
             except OSError:
                 pass
+    _remove_runtime_link(root / "lib" / "nxthooks")
     try:
         root.rmdir()
     except OSError:
         pass
     return True
+
+
+def _remove_runtime_link(lib: Path) -> None:
+    """The symlink and the versioned directory it points at, once the
+    inventory pass has emptied that directory. One still holding something the
+    operator put there keeps both, so the path they knew it by still works."""
+    if not lib.is_symlink():
+        return
+    target = lib.resolve()
+    if target.parent != lib.parent.resolve() or not target.name.startswith(_RUNTIME_PREFIX):
+        return
+    try:
+        if target.exists():
+            target.rmdir()
+    except OSError:
+        return
+    lib.unlink()
+    try:
+        lib.parent.rmdir()
+    except OSError:
+        pass
 
 
 @exclusive_lifecycle
@@ -1402,9 +1542,7 @@ def cmd_uninstall(args, host: Host | None = None) -> int:
     roots = _known_roots(host)
     scoped = tuple({*(roots or ()), root})
 
-    from nxthooks._vendor.plugins.delivery import withdraw  # see cmd_install
-
-    removed, problem = withdraw(PLUGIN_ID, host.home)
+    removed, problem = withdraw(PLUGIN_ID, host.home, host.env)
     if problem:
         print(f"ERROR               {problem}")
     elif removed is not None:
@@ -1423,6 +1561,11 @@ def cmd_uninstall(args, host: Host | None = None) -> int:
             print(line)
         for line in codex_unwire(host, None):
             print(line)
+
+    runtime_lib = root / "lib"
+    for line in _provision_builtin_hooks(host, runtime_lib if runtime_lib.is_dir() else _pkg_dir().parent,
+                                         uninstall=True):
+        print(line)
 
     for line in _remove_owned_paths(host):
         print(line)
@@ -1475,59 +1618,6 @@ def _check(label: str, ok: bool, detail: str = "") -> bool:
     return ok
 
 
-CAPABILITY_MATRIX = """\
-capability matrix (effective enforcement):
-
-  hook class              claude-code  codex       pi            opencode              hermes
-  ---------------------   -----------  ----------  -----------   -------------------   ----------
-  session_start inject    inject       inject      inject        (no event; gap)       inject
-  prompt_submit inject    inject       inject      inject        inject (advise-only)  inject
-  before_tool block       block        block*      block** /     block (throw)         block
-                                                    preflight***
-  after_tool observe      observe      observe     observe       observe               observe
-  stop/session_close      not adapted  wired****   not adapted   not adapted           not adapted
-
-  * Codex PreToolUse covers Bash, apply_patch, MCP, and most local function
-    tools. Hosted and specialized tool paths can bypass it, so it is a strong
-    guardrail rather than a complete security boundary.
-  ** pi blocks for real, through `tool_call` ("Fired before a tool executes.
-    Can block."), whose handler returns {block, reason}. This row read "pi
-    has no pre-tool blocking point" until 2026-09-15 -- asserted, never
-    checked, and it cost pi every blocking hook in the catalogue. Verified
-    live against a refusing hook.
-  *** A pi_preflight hook has a block condition knowable without tool/args;
-    pi dispatches it at turn start and turns a block verdict into an
-    interactive stay-or-switch-style confirmation. Unchanged by the above:
-    it answers before any tool has been chosen, which the real gate cannot.
-  **** Codex maps stop to Stop and session_close to SessionEnd. SessionEnd is
-    advisory and can be delayed until the thread is actually closed/idle.
-
-  Every harness above has a real pre-tool gate as of 2026-09-15; pi was the
-  last without one and only appeared to be. What remains is Codex's footnote:
-  PreToolUse covers Bash, apply_patch, MCP and most local function tools, and
-  hosted or specialised tool paths can route around it. Treat before_tool as
-  a strong guardrail there rather than a complete boundary, and put anything
-  that must not be bypassed behind after_tool as well, which observes what
-  actually ran. Instructions in an AGENTS.md remain advice to a model, never
-  enforcement.
-
-  hermes maps onto its own vocabulary, not matching names:
-    session_start  a registered system prompt section, re-evaluated per new
-                   session. NOT on_session_start, whose return is discarded --
-                   injecting there would be a silent no-op.
-    prompt_submit  pre_llm_call. Context merges into the current turn's user
-                   message. It cannot veto the call, so a block verdict
-                   degrades to an in-context warning, as on pi.
-    before_tool    pre_tool_call, a real pre-execution veto. Hermes also
-                   offers an approve directive escalating to its human gate,
-                   which no other harness has; unused for now.
-    after_tool     post_tool_call, return discarded.
-  Its transport is Python loaded into the agent process, not a subprocess
-  invoked with JSON on stdin, and plugins are opt-in per profile: installing
-  activates nothing until the profile's config.yaml lists it in
-  plugins.enabled."""
-
-
 def _report_projections(host: Host) -> bool:
     """Tri-state per ledger slot: intact, altered, missing.
 
@@ -1566,11 +1656,15 @@ def cmd_verify(args, host: Host | None = None) -> int:
 
     from .registry import resolve
 
-    entries, collisions = resolve(hooks_d=host.hooks_d)
+    entries, collisions = resolve(
+        hooks_d=host.hooks_d,
+        library=host.library_root,
+    )
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")
-    pending = [e for e in entries if _source_state(e) == "pending"]
+    pending = [e for e in entries if _source_state(e, host) == "pending"]
     for entry in entries:
-        ok &= _check_source(entry)
+        ok &= _check_source(entry, host)
+    runtime_failures = _report_hook_failures({e["name"] for e in entries})
     # registry.render_collisions, not a second copy of its format string: the
     # first version of this line was a duplicate, so improving the warning in
     # registry.py changed nothing an operator ever saw.
@@ -1596,14 +1690,14 @@ def cmd_verify(args, host: Host | None = None) -> int:
             return True
         return _check(label, passed, detail)
 
-    wired_events = _wired_events(host.cc_settings, EVENT_TO_CC)
+    wired_events = _wired_events(host.cc_settings, EVENT_TO_CC_ALL)
     #: Only the events some live hook declares. The list used to be the three
     #: hardcoded here, which made verify disagree with install in both
     #: directions: it reported a GAP for an event install correctly declined to
     #: wire because nothing needed it, and it never checked after_tool at all,
     #: which is the one event the only builtin declares.
     expected = wiring_groups(host)
-    for canonical in EVENT_TO_CC:
+    for canonical in EVENT_TO_CC_ALL:
         label = f"claude-code wiring ({canonical})"
         if not expected.get(canonical):
             # Said, not skipped. An event absent from the report reads as an
@@ -1653,9 +1747,73 @@ def cmd_verify(args, host: Host | None = None) -> int:
         notes.append(f"{len(pending)} source(s) pending from {providers}")
     if collisions:
         notes.append(f"{len(collisions)} user hook(s) shadowed")
+    if runtime_failures:
+        notes.append(f"{len(runtime_failures)} hook(s) failing at runtime")
     detail = f" ({', '.join(notes)})" if notes else ""
     print(f"\nresult: all wiring resolves{detail}.")
     return 0
+
+
+def _report_hook_failures(live: set[str], *, now: float | None = None) -> list[str]:
+    """Print the dispatcher's failure ledger, and return the live hook names in it.
+
+    Every other check in this report asks whether a hook *exists*. Existence is
+    cheap: `~/.git-hooks` was pointed at a scan that refused every snapshot
+    commit for every project on this machine for a day, and each of those hooks
+    was `[ok]` the whole time, because there was a file at the path the manifest
+    names. This is the check that asks whether the hook has been able to do its
+    job lately, read out of the record the dispatcher keeps when it turns a
+    failure into an allow.
+
+    Only the recent part of it, because this report has a credibility to
+    protect. The ledger is history and never clears on success, so a one-off
+    blip from a month ago would print forever next to a hook that has run clean
+    since, and a report that nags about settled things is a report its reader
+    stops reading -- the disease this file exists to treat. Older history stays
+    in the ledger, is counted in the summary line, and names the file, which is
+    where forensics belongs.
+
+    Counts against nothing. A hook failing is a defect in the hook or its
+    environment, not in the wiring, and `install` finishes by running verify --
+    making this flip the exit code would let a broken third-party hook fail an
+    install that worked. It is loud in the report and named in the summary, and
+    the same record reaches the model hourly through `dispatch.record_failures`.
+    """
+    from .dispatch import FAILURE_REPORT_WINDOW, failure_ledger_path, read_failure_ledger
+
+    ledger = read_failure_ledger()
+    if not ledger:
+        return []
+    now = time.time() if now is None else now
+    failing: list[str] = []
+    dormant = recovered = 0
+    for name in sorted(ledger):
+        entry = ledger[name]
+        if not isinstance(entry, dict):
+            continue
+        count = int(entry.get("count", 0))
+        last_at = float(entry.get("last_at", 0))
+        if now - last_at > FAILURE_REPORT_WINDOW:
+            dormant += 1
+            continue
+        if float(entry.get("last_ok_at", 0)) > last_at:
+            recovered += 1
+            continue
+        days = max(1, int((now - last_at) // 86400) + 1)
+        last = time.strftime("%Y-%m-%d %H:%M", time.localtime(last_at))
+        where = "" if name in live else "  (no longer in the directory)"
+        print(f"  [warn] hook '{name}' failed {count}x in {days}d of observation, "
+              f"last at {last}: {str(entry.get('last_error', ''))[:160]}{where}")
+        if name in live:
+            failing.append(name)
+    if failing or dormant or recovered:
+        note = f"{len(failing)} failing lately"
+        if recovered:
+            note += f"; {recovered} recovered (ran clean since its last failure)"
+        if dormant:
+            note += f"; {dormant} older entr{'y' if dormant == 1 else 'ies'}"
+        print(f"         {note} — log: {failure_ledger_path()}")
+    return failing
 
 
 def _wired_events(path: Path, vocabulary: dict) -> set[str]:
@@ -1682,7 +1840,7 @@ def _report_overlaps(host: Host, entries: list[dict]) -> None:
         doc = json.loads(host.cc_settings.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         doc = {}
-    managed_sources = {Path(os.path.expanduser(e["source"])).name for e in entries}
+    managed_sources = {Path(e["source"]).name for e in entries}
     foreign_scripts = set()
     for _pointer, command in walk_commands(doc):
         if owned_command(command, None):
@@ -1746,7 +1904,7 @@ def cmd_doctor(args, host: Host | None = None) -> int:
 
 def cmd_list(args, host: Host | None = None) -> int:
     host = host or Host.local()
-    entries = load_manifests(host.hooks_d)
+    entries = load_manifests(host.hooks_d, library=host.library_root)
     if not entries:
         print("no hooks in the directory.", host.hooks_d)
         return 0
