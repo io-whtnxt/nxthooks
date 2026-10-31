@@ -156,6 +156,11 @@ nxthooks list        # show the directory
 nxthooks uninstall [--keep-runtime] [--purge-config]
 ```
 
+Two more commands install beside it. `nxtlint --staged` gates the git-staged
+Python files the way the `nxtlint` hook advises on them, and `nxthooks-pack`
+is the NxtPack configuration provider a host drives over stdin — the one
+`nxtpack.json` names as its provider.
+
 `install` always replaces the runtime, so it doubles as the repair path.
 `--keep-newer` keeps one whose `VERSION` is newer than the package, so a host
 that bundles an older NxtHooks never downgrades a standalone install. The

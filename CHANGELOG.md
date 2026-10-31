@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `nxtlint` and `nxthooks-pack` install as console scripts. NxtLint's CLI was
+  reachable only as `python -m nxthooks.engines.nxtlint.cli`, and `nxtpack.json`
+  names `nxthooks.pack` as its provider while no installed script of that name
+  existed — the declaration is what a host runs by argv.
+- The declaration is now checked against the package: its provider is an
+  installed console script, every console-script target resolves to a callable,
+  each operation's `field_args` name flags the CLI defines, and the install
+  operation's harness choices are `INSTALLABLE_HARNESSES`. Ported from the
+  NxtOS tree, which dropped them along with its copy of this package (9bd60614).
+
 ## 0.2.0
 
 NxtHooks is its own project now. This repository is the source of truth; it
