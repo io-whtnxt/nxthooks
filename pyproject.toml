@@ -29,6 +29,8 @@ Changelog = "https://github.com/io-whtnxt/nxthooks/blob/main/CHANGELOG.md"
 
 [project.scripts]
 nxthooks = "nxthooks.cli:main"
+nxtlint = "nxthooks.engines.nxtlint.cli:main"
+nxthooks-pack = "nxthooks.pack:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "nxthooks.__version__" }
