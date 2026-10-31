@@ -8,7 +8,9 @@
   existed — the declaration is what a host runs by argv.
 - The declaration is now checked against the package: its provider is an
   installed console script, every console-script target resolves to a callable,
-  each operation's `field_args` name flags the CLI defines, and the install
+  each operation's `field_args` name switches that operation's own subcommand
+  defines — not merely switches some subcommand defines, which let an
+  uninstall-only `--keep-runtime` pass as an `install` flag — and the install
   operation's harness choices are `INSTALLABLE_HARNESSES`. Ported from the
   NxtOS tree, which dropped them along with its copy of this package (9bd60614).
 
