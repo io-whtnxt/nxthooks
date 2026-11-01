@@ -71,3 +71,31 @@ def test_a_file_with_nothing_of_ours_left_is_the_original_text(hooks_machine):
 
     assert host.cc_settings.read_text() == original
     assert host.codex_hooks.read_text() == codex_original
+
+
+def test_every_inline_object_in_a_multiline_array_keeps_its_line(hooks_machine):
+    host = hooks_machine("claude-code", "codex")
+    codex_original = (
+        '{\n  "hooks": {\n    "Stop": [{"command": "a"}, {"command": "b"},'
+        ' {"command": "c"}],\n    "Other": [\n      {"command": "a"},\n'
+        '      {"command": "b"}\n    ]\n  },\n'
+        '  "grid": [[1, 2], [3, 4], {"k": [5, 6]}, "s", [7]]\n}\n'
+    )
+    host.codex_hooks.write_text(codex_original)
+
+    _roundtrip(host, host.home / "root")
+
+    assert host.codex_hooks.read_text() == codex_original
+
+
+def test_a_foreign_empty_event_list_is_left_alone_and_not_rewritten(hooks_machine):
+    host = hooks_machine("claude-code", "codex")
+    original = '{\n  "hooks": {\n    "PreToolUse": []\n  }\n}\n'
+    host.cc_settings.write_text(original)
+    before = host.cc_settings.stat().st_mtime_ns
+
+    lines = lifecycle.cc_unwire(host, None)
+
+    assert lines == []
+    assert host.cc_settings.read_text() == original
+    assert host.cc_settings.stat().st_mtime_ns == before

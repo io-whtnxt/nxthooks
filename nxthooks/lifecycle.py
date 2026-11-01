@@ -426,6 +426,7 @@ def strip_ours(doc: dict, roots: tuple[Path, ...] | None) -> dict:
         if not isinstance(groups, list):
             continue
         kept_groups = []
+        event_lost = False
         for group in groups:
             members = group.get("hooks") if isinstance(group, dict) else None
             if not isinstance(members, list):
@@ -441,10 +442,12 @@ def strip_ours(doc: dict, roots: tuple[Path, ...] | None) -> dict:
             if len(kept) == len(members):
                 kept_groups.append(group)
                 continue
-            removed = True
+            removed = event_lost = True
             if kept:
                 group["hooks"] = kept
                 kept_groups.append(group)
+        if not event_lost:
+            continue
         if kept_groups:
             hooks[event] = kept_groups
         else:

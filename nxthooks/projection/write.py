@@ -142,8 +142,6 @@ def _inline_containers(text: str) -> dict:
             body = text[start:i + 1]
             if not multiline and body[1:-1].strip():
                 found[path] = (body, json.loads(body))
-            if stack:
-                _advance(stack[-1])
         elif ch == ",":
             if stack:
                 _advance(stack[-1])
