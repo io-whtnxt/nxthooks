@@ -426,20 +426,28 @@ def strip_ours(doc: dict, roots: tuple[Path, ...] | None) -> dict:
         if not isinstance(groups, list):
             continue
         kept_groups = []
+        event_lost = False
         for group in groups:
-            if not isinstance(group, dict):
+            members = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(members, list):
+                # Not the `{"hooks": [...]}` shape we write (a Codex flat
+                # `{"command": ...}` entry, say): foreign by construction.
                 kept_groups.append(group)
                 continue
             kept = [
-                hook for hook in (group.get("hooks") or [])
+                hook for hook in members
                 if not (isinstance(hook, dict)
                         and owned_command(hook.get("command", ""), roots))
             ]
-            if len(kept) != len(group.get("hooks") or []):
-                removed = True
+            if len(kept) == len(members):
+                kept_groups.append(group)
+                continue
+            removed = event_lost = True
             if kept:
                 group["hooks"] = kept
                 kept_groups.append(group)
+        if not event_lost:
+            continue
         if kept_groups:
             hooks[event] = kept_groups
         else:

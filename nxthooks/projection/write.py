@@ -46,7 +46,7 @@ import os
 import re
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -69,6 +69,10 @@ class JsonStyle:
     indent: int | str = 2
     ensure_ascii: bool = False
     trailing_newline: bool = True
+    #: Containers the file wrote on one line, by path: the verbatim text and
+    #: its parsed value. `json.dumps(indent=)` has no such form, so without
+    #: this every compact nested object comes back expanded.
+    inline: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -99,12 +103,91 @@ def detect_json_style(text: str) -> JsonStyle:
         indent=indent,
         ensure_ascii=text.isascii(),
         trailing_newline=text.endswith("\n"),
+        inline=_inline_containers(text),
     )
 
 
+def _inline_containers(text: str) -> dict:
+    """Path -> (verbatim text, value) for every non-empty container written on
+    one line. Empty ones are skipped: `json.dumps` already writes `{}`/`[]`.
+    A document that does not parse yields nothing; the caller refuses it."""
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    found: dict = {}
+    # Frames: [kind, path, start, multiline, next_index, pending_key, expect_key]
+    stack: list[list] = []
+    i, n = 0, len(text)
+    decoder = json.JSONDecoder()
+
+    def value_path() -> tuple:
+        if not stack:
+            return ()
+        top = stack[-1]
+        return top[1] + ((top[5],) if top[0] == "{" else (top[4],))
+
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            value, end = decoder.raw_decode(text, i)
+            if stack and stack[-1][0] == "{" and stack[-1][6]:
+                stack[-1][5], stack[-1][6] = value, False
+            i = end
+            continue
+        if ch in "{[":
+            stack.append([ch, value_path(), i, False, 0, None, ch == "{"])
+        elif ch in "}]":
+            kind, path, start, multiline, count, _, _ = stack.pop()
+            body = text[start:i + 1]
+            if not multiline and body[1:-1].strip():
+                found[path] = (body, json.loads(body))
+        elif ch == ",":
+            if stack:
+                _advance(stack[-1])
+        elif ch == "\n":
+            for frame in stack:
+                frame[3] = True
+        elif not ch.isspace() and ch not in ":":
+            # A bare scalar: number, true, false, null.
+            _, end = decoder.raw_decode(text, i)
+            i = end
+            continue
+        i += 1
+    return found
+
+
+def _advance(frame: list) -> None:
+    if frame[0] == "{":
+        frame[6] = True
+    else:
+        frame[4] += 1
+
+
 def dump_json(doc, style: JsonStyle) -> str:
-    body = json.dumps(doc, indent=style.indent, ensure_ascii=style.ensure_ascii)
-    return body + "\n" if style.trailing_newline else body
+    return _dump(doc, style, (), 0) + ("\n" if style.trailing_newline else "")
+
+
+def _dump(value, style: JsonStyle, path: tuple, depth: int) -> str:
+    """`json.dumps(indent=)`, except a container the file wrote on one line
+    comes back on one line: verbatim while its value is unchanged."""
+    ascii_only = style.ensure_ascii
+    if isinstance(value, (dict, list)) and value:
+        kept = style.inline.get(path)
+        if kept is not None:
+            return kept[0] if kept[1] == value else json.dumps(
+                value, ensure_ascii=ascii_only)
+        unit = style.indent if isinstance(style.indent, str) else " " * style.indent
+        inner, outer = "\n" + unit * (depth + 1), "\n" + unit * depth
+        if isinstance(value, dict):
+            items = [f"{json.dumps(k, ensure_ascii=ascii_only)}: "
+                     f"{_dump(v, style, path + (k,), depth + 1)}"
+                     for k, v in value.items()]
+            return "{" + inner + ("," + inner).join(items) + outer + "}"
+        items = [_dump(v, style, path + (i,), depth + 1)
+                 for i, v in enumerate(value)]
+        return "[" + inner + ("," + inner).join(items) + outer + "]"
+    return json.dumps(value, ensure_ascii=ascii_only)
 
 
 def canonical_json(doc) -> str:

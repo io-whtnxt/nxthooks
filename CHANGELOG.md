@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- **Uninstall no longer drops foreign hook entries.** `strip_ours` treated any
+  group without a `hooks` list (a Codex `{"command": ...}` entry) as emptied
+  and deleted it. Only groups we actually removed a stanza from are dropped.
+  The writer also keeps containers the file wrote on one line, so install then
+  uninstall hands back the operator's original text. The C6
+  `C6-foreign-remainder` acceptance is removed from `component.toml`.
 - `nxtlint` and `nxthooks-pack` install as console scripts. NxtLint's CLI was
   reachable only as `python -m nxthooks.engines.nxtlint.cli`, and `nxtpack.json`
   names `nxthooks.pack` as its provider while no installed script of that name
