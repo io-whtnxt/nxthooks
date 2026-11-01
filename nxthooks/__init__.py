@@ -6,7 +6,7 @@ Hook behavior is edited once, in its manifest's source location; every
 wired harness picks it up on the next event.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 CANONICAL_EVENTS = (
     "session_start",

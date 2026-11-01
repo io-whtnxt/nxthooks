@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - **Uninstall no longer drops foreign hook entries.** `strip_ours` treated any
   group without a `hooks` list (a Codex `{"command": ...}` entry) as emptied
   and deleted it. Only groups we actually removed a stanza from are dropped.
