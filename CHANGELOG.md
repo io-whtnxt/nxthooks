@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Uninstall takes back the plugin's agent documents.** NxtOS's delivery
+  copies every `agents:` entry a manifest declares beside `plugin.yaml`; the
+  pane's delivery removed only `plugin.yaml`, so a component that shipped an
+  agent left that agent installed after the component was gone. `withdraw`
+  now reads the declaration from the installed manifest and removes exactly
+  those files, under the same confinement the host applied on the way in —
+  `..`, absolute paths, symlinks escaping the plugin directory, and anything
+  that is not a file are refused — then prunes the directories that emptied.
+  A file the manifest never declared is never touched, and a declaration this
+  package cannot read costs nothing but the declaration: the reason stays
+  empty, because the Plugin SDK raises on a non-empty one.
+
 ## 0.2.1
 
 - **Uninstall no longer drops foreign hook entries.** `strip_ours` treated any

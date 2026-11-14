@@ -51,11 +51,55 @@ def test_nothing_outside_the_standard_library_is_imported_at_module_level():
     assert violations == {}, violations
 
 
+def _guarded_third_party(path: Path) -> set[str]:
+    """Third-party modules this file imports only behind `except ImportError`.
+
+    The allow-list below is worthless if it merely forgives a filename, so
+    what it checks is the reason the filename is tolerable: the import sits in
+    a `try` whose handler catches `ImportError`, which is what makes a missing
+    PyYAML a report instead of a crash inside a `fail = "open"` subprocess.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    protected: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        guarded = any(_catches_import_error(handler) for handler in node.handlers)
+        if not guarded:
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Import):
+                protected |= {a.name for a in inner.names}
+    return {m for m in protected if _top(m) not in STDLIB and _top(m) != "nxthooks"}
+
+
+def _catches_import_error(handler: ast.excepthandler) -> bool:
+    if handler.type is None:  # bare `except:`
+        return True
+    names = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(
+        isinstance(name, ast.Name) and name.id in ("ImportError", "ModuleNotFoundError")
+        for name in names
+    )
+
+
 def test_the_only_third_party_import_is_a_lazy_optional_one():
-    """PyYAML, for Hermes' `config.yaml`, imported inside the function that needs it."""
+    """PyYAML, in two places, each imported inside the function that needs it.
+
+    `projection/verify.py` reads Hermes' `config.yaml`; `delivery.py` reads the
+    `agents:` declaration of an installed plugin manifest so that `uninstall`
+    can take back what the host wrote. Neither is on the dispatch path, and
+    each answers "I cannot read this file" when the import fails, which is the
+    same answer as a file that is not there.
+    """
     violations = {}
     for py in sorted(PKG.rglob("*.py")):
         bad = {m for m in _all_imports(py) if _top(m) not in STDLIB and _top(m) != "nxthooks"}
         if bad:
+            unguarded = bad - _guarded_third_party(py)
+            assert not unguarded, f"{py.relative_to(PKG.parent)}: unguarded {sorted(unguarded)}"
             violations[str(py.relative_to(PKG.parent))] = sorted(bad)
-    assert violations == {"nxthooks/projection/verify.py": ["yaml"]}, violations
+    assert violations == {
+        "nxthooks/delivery.py": ["yaml"],
+        "nxthooks/projection/verify.py": ["yaml"],
+    }, violations
