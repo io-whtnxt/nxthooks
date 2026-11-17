@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Release contract for the NxtOS plugin pipeline (T1282).** The repo now
+  carries a `[tool.nxt-release]` table, `scripts/release.sh` (a thin wrapper
+  that runs the shared nxtos `scripts/plugin_release.py` with this repo as
+  its parameter, replacing `release-build.sh`), and
+  `tests/test_release_contract.py`. Releases publish as signed tarballs to
+  `io-whtnxt/nxtos-releases`, not to PyPI (see the removed workflow).
+
 ## 0.2.2
 
 - **Uninstall takes back the plugin's agent documents.** NxtOS's delivery
