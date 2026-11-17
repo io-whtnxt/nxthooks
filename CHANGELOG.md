@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - **Uninstall takes back the plugin's agent documents.** NxtOS's delivery
   copies every `agents:` entry a manifest declares beside `plugin.yaml`; the
