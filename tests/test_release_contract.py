@@ -2,15 +2,14 @@
 
 Covers the three pieces Spec 2 delivers here: the `[tool.nxt-release]`
 config fields (contract 2.4), the single version source that `--version`
-must print (invariant I-4), and the thin `scripts/release.sh` wrapper's
-argv shape and thinness (invariant I-1).
+must print (invariant I-4), and the `scripts/release.sh` wrapper's
+byte-identity with the shared plugin release wrapper (invariant I-1).
 """
 
 from __future__ import annotations
 
 import ast
-import json
-import os
+import hashlib
 import re
 import subprocess
 import sys
@@ -21,6 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())
 CFG = PYPROJECT["tool"]["nxt-release"]
 WRAPPER = ROOT / "scripts" / "release.sh"
+# The one plugin release wrapper (nxtos scripts/plugin-release-wrapper.sh).
+# The contract is byte-identity, not shape: any edit must land in every
+# plugin repo at once via the shared source, so we pin the hash.
+WRAPPER_SHA256 = "7e4358721cd3787de6f19bb58ef3536aee06e4bedc4097110f00f5e5d2052eb5"
 
 
 def _source_version() -> str:
@@ -76,49 +79,14 @@ def test_cli_version_prints_the_version_source():
 
 # --- scripts/release.sh (I-1) -----------------------------------------------
 
-def test_wrapper_replaces_release_build_and_is_thin():
+def test_release_build_script_is_gone():
     assert not (ROOT / "scripts" / "release-build.sh").exists()
-    assert os.access(WRAPPER, os.X_OK)
-    text = WRAPPER.read_text()
-    assert len(text.splitlines()) < 20
-    for banned in ("git tag", "gh ", "PyInstaller"):
-        assert banned not in text, f"release logic does not belong in the wrapper: {banned!r}"
 
 
-def _run_wrapper(tmp_path, *args):
-    scripts = tmp_path / "nxtos" / "scripts"
-    scripts.mkdir(parents=True, exist_ok=True)
-    (scripts / "plugin_release.py").write_text("import json, sys\nprint(json.dumps(sys.argv[1:]))\n")
-    proc = subprocess.run([str(WRAPPER), *args], capture_output=True, text=True,
-                          env={**os.environ, "NXTOS_REPO": str(tmp_path / "nxtos")})
-    return proc
-
-
-def test_wrapper_argv_per_stage(tmp_path):
-    out = str(tmp_path / "out")
-    cases = {
-        ("candidate", "--out", out): ["candidate", "--repo", str(ROOT), "--out", out],
-        ("bump", "--part", "patch"): ["bump", "--repo", str(ROOT), "--part", "patch"],
-        ("hosted", "--release", "rec.json"): ["hosted", "--release", "rec.json"],
-        ("publish", "--release", "rec.json"): ["publish", "--release", "rec.json"],
-        (): ["--repo", str(ROOT)],
-    }
-    for args, expected in cases.items():
-        proc = _run_wrapper(tmp_path, *args)
-        assert proc.returncode == 0, f"{args}: {proc.stderr}"
-        assert json.loads(proc.stdout) == expected, args
-
-
-def test_unknown_stage_is_refused(tmp_path):
-    proc = _run_wrapper(tmp_path, "publish-to-pypi")
-    assert proc.returncode == 2 and "unknown stage" in proc.stderr
-
-
-def test_missing_shared_script_fails_with_a_pointer(tmp_path):
-    proc = subprocess.run([str(WRAPPER), "candidate", "--out", str(tmp_path)],
-                          capture_output=True, text=True,
-                          env={**os.environ, "NXTOS_REPO": str(tmp_path / "absent")})
-    assert proc.returncode == 1 and "NXTOS_REPO" in proc.stderr
+def test_wrapper_is_the_shared_plugin_release_wrapper():
+    assert hashlib.sha256(WRAPPER.read_bytes()).hexdigest() == WRAPPER_SHA256
+    proc = subprocess.run(["bash", "-n", str(WRAPPER)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
 
 
 # --- no package-index publishing (operator decision 2026-11-16) -------------
