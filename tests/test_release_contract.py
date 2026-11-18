@@ -23,7 +23,7 @@ WRAPPER = ROOT / "scripts" / "release.sh"
 # The one plugin release wrapper (nxtos scripts/plugin-release-wrapper.sh).
 # The contract is byte-identity, not shape: any edit must land in every
 # plugin repo at once via the shared source, so we pin the hash.
-WRAPPER_SHA256 = "7e4358721cd3787de6f19bb58ef3536aee06e4bedc4097110f00f5e5d2052eb5"
+WRAPPER_SHA256 = "ba82ca8c7f63ff62d9678a5667676846d4e0f84c49829fd4e26842729f80ff0e"
 
 
 def _source_version() -> str:

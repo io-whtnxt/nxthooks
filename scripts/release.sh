@@ -8,6 +8,8 @@ SHARED="${NXTOS_REPO:-$HOME/Documents/Coding Projects/nxtos}/scripts/plugin_rele
 usage() { echo "usage: scripts/release.sh bump|candidate|hosted|publish [args...]" >&2; }
 [ -f "$SHARED" ] || { echo "error: $SHARED not found; set NXTOS_REPO to an nxtos checkout" >&2; exit 1; }
 STAGE="${1:-}"
+# The pin is the point: argparse keeps the last --repo, so a caller's would win.
+case " $* " in *" --repo "*|*" --repo="*) echo "error: --repo is pinned to $REPO" >&2; exit 2 ;; esac
 case "$STAGE" in
   -h|--help) usage; exec python3 -I "$SHARED" --help ;;
   bump|publish) shift; exec python3 -I "$SHARED" "$STAGE" --repo "$REPO" "$@" ;;
