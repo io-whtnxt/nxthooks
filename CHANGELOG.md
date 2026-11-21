@@ -9,6 +9,16 @@
   `tests/test_release_contract.py`. Releases publish as signed tarballs to
   `io-whtnxt/nxtos-releases`, not to PyPI (see the removed workflow).
 
+- **The shared wrapper hardened (T2286).** `scripts/release.sh` now judges
+  option tokens instead of the flattened argument string — a value containing
+  `--repo`, or any word after `--`, no longer aborts a release — recognises the
+  `--out=` spelling before filling in its default, and defaults `NXTOS_REPO` to
+  `~/Coding/nxtos`, the MSM5 code root (the old default pointed at a retired
+  machine). The argv it builds is pinned by behavioural tests in nxtos
+  `tests/test_plugin_release_wrapper.py`; the sha256 pinned here is the
+  byte-identity half of the same contract. `bins` must now equal the
+  `[project.scripts]` keys, so a new console script cannot miss the bundle.
+
 ## 0.2.2
 
 - **Uninstall takes back the plugin's agent documents.** NxtOS's delivery

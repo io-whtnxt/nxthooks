@@ -23,7 +23,7 @@ WRAPPER = ROOT / "scripts" / "release.sh"
 # The one plugin release wrapper (nxtos scripts/plugin-release-wrapper.sh).
 # The contract is byte-identity, not shape: any edit must land in every
 # plugin repo at once via the shared source, so we pin the hash.
-WRAPPER_SHA256 = "ba82ca8c7f63ff62d9678a5667676846d4e0f84c49829fd4e26842729f80ff0e"
+WRAPPER_SHA256 = "18f60a5e3d7a1e8d15e6ef6ea6d859c91801a5ce6948a0b44d7f51bc908201e9"
 
 
 def _source_version() -> str:
@@ -39,7 +39,9 @@ def test_plugin_and_bins():
     assert CFG["plugin"] == "nxthooks"
     scripts = PYPROJECT["project"]["scripts"]
     assert CFG["plugin"] in CFG["bins"]
-    assert set(CFG["bins"]) <= set(scripts), "every bin must be a [project.scripts] key"
+    # The dangerous drift is the other way round: a fourth console script left
+    # out of `bins` would silently miss the frozen bundle (review 451a7f42).
+    assert set(CFG["bins"]) == set(scripts), "every [project.scripts] key ships, and nothing else"
     # The stranger journey expects exactly these three on PATH.
     assert CFG["bins"] == ["nxthooks", "nxtlint", "nxthooks-pack"]
 
