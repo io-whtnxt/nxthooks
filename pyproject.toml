@@ -53,5 +53,14 @@ include = ["nxthooks*"]
 ]
 "nxthooks.engines.nxtgrep" = ["patterns/*.conf"]
 
+# Release contract (T1282), read by nxtos scripts/plugin_release.py. `lock`
+# is omitted because the resolved third-party set is empty (standard library
+# only); `extras` stays at its default for the same reason.
+[tool.nxt-release]
+plugin = "nxthooks"
+bins = ["nxthooks", "nxtlint", "nxthooks-pack"]
+package_data = ["nxthooks", "nxthooks.engines.nxtgrep"]
+smoke = [["--contract"]]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
