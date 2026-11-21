@@ -1853,8 +1853,11 @@ def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         doc = {}
+    # A settings file in a shape we cannot read wires nothing, so every declared
+    # matcher reads as a gap rather than a traceback (review 5800006b).
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
     wired: dict[str, set[str | None]] = {}
-    for cc_event, stanzas in (doc.get("hooks") or {}).items():
+    for cc_event, stanzas in (hooks if isinstance(hooks, dict) else {}).items():
         for stanza in stanzas if isinstance(stanzas, list) else []:
             if not isinstance(stanza, dict):
                 continue
@@ -1870,7 +1873,8 @@ def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[
         have = wired.get(canonical, set())
         if None in have:
             continue
-        missing = sorted(m for m in matchers if m is not None and m not in have)
+        # `_validate` does not type matchers, and a report must not crash on one.
+        missing = sorted(str(m) for m in matchers if m is not None and m not in have)
         if missing:
             gaps[canonical] = missing
     return gaps

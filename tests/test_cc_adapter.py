@@ -232,3 +232,11 @@ def test_a_match_all_stanza_covers_every_declared_matcher(hooks_machine):
     lifecycle.cc_wire(host, host.home / "runtime", {"before_tool": [None]})
 
     assert lifecycle.unwired_matchers(host.cc_settings, {"before_tool": ["mcp__x", "Bash"]}) == {}
+
+
+@pytest.mark.parametrize("content", ["[]", '"text"', "7", '{"hooks": []}', '{"hooks": "x"}'])
+def test_a_settings_file_in_an_unreadable_shape_reports_every_matcher_as_a_gap(tmp_path, content):
+    settings = tmp_path / "settings.json"
+    settings.write_text(content)
+
+    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash", 42]}) == {"before_tool": ["42", "Bash"]}
