@@ -214,3 +214,45 @@ def test_a_hook_disabled_for_claude_code_does_not_widen_its_stanza(hooks_machine
     assert "Bash" in before_tool
     assert None not in before_tool
     assert lifecycle.matcher_groups_for("before_tool", host, harness="pi") == [None]
+
+
+def test_a_declared_matcher_the_wiring_lacks_is_a_gap(hooks_machine):
+    # T2290: PreToolUse wired for Bash and Write passes the per-event check, yet a
+    # hook on an MCP tool behind it never runs until install rewires
+    host = hooks_machine("claude-code")
+    lifecycle.cc_wire(host, host.home / "runtime", {"before_tool": ["Bash", "Write"], "after_tool": ["Edit"]})
+    expected = {"before_tool": ["Bash", "Write", "mcp__paseo__create_agent"], "after_tool": ["Edit"],
+                "prompt_submit": [None]}
+
+    assert lifecycle.unwired_matchers(host.cc_settings, expected) == {"before_tool": ["mcp__paseo__create_agent"]}
+
+
+def test_a_match_all_stanza_covers_every_declared_matcher(hooks_machine):
+    host = hooks_machine("claude-code")
+    lifecycle.cc_wire(host, host.home / "runtime", {"before_tool": [None]})
+
+    assert lifecycle.unwired_matchers(host.cc_settings, {"before_tool": ["mcp__x", "Bash"]}) == {}
+
+
+@pytest.mark.parametrize("content", ["[]", '"text"', "7", '{"hooks": []}', '{"hooks": "x"}'])
+def test_a_settings_file_in_an_unreadable_shape_reports_every_matcher_as_a_gap(tmp_path, content):
+    settings = tmp_path / "settings.json"
+    settings.write_text(content)
+
+    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash", "Write"]}) == {"before_tool": ["Bash", "Write"]}
+
+
+@pytest.mark.parametrize("stanza", ['{"hooks": 5}', '{"matcher": ["Bash"], "hooks": []}', '{"matcher": {"a": 1}, "hooks": [{"command": 3}]}'])
+def test_a_stanza_in_an_unreadable_shape_matches_nothing(tmp_path, stanza):
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {"PreToolUse": [' + stanza + ']}}')
+
+    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash"]}) == {"before_tool": ["Bash"]}
+
+
+@pytest.mark.parametrize("matchers", [["Bash", 42], [["x"]], [None], [""], "Bash"])
+def test_a_manifest_with_untyped_matchers_is_refused_at_load(matchers):
+    from nxthooks.manifest import ManifestError, _validate
+    entry = {"name": "odd", "events": ["before_tool"], "source": "/x.py", "matchers": matchers}
+    with pytest.raises(ManifestError, match="matchers"):
+        _validate(entry, "test.toml")

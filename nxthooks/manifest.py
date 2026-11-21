@@ -76,6 +76,11 @@ def _validate(entry: dict, origin: str) -> dict:
             raise ManifestError(f"{origin}/{name}: 'pi_preflight' must be a bool")
         if entry["pi_preflight"] and "before_tool" not in events:
             raise ManifestError(f"{origin}/{name}: 'pi_preflight' only applies to a hook with 'before_tool' in events")
+    matchers = entry.get("matchers", [])
+    if not isinstance(matchers, list) or not all(isinstance(m, str) and m for m in matchers):
+        # A matcher is a tool-name glob. Anything else wired as one matches no
+        # tool and crashes matcher_matches at dispatch (T2290, review d00cb732).
+        raise ManifestError(f"{origin}/{name}: 'matchers' must be a list of tool-name strings")
     return entry
 
 
