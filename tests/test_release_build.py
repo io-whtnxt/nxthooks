@@ -1,4 +1,8 @@
-"""The release build step (T1282): the shared nxtos pipeline builds this repo reproducibly."""
+"""The release build step (T1282): the shared nxtos pipeline builds this repo reproducibly.
+
+Drives the shared script directly; the wrapper's argv shape and thinness are
+covered by tests/test_release_contract.py.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +11,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-WRAPPER = ROOT / "scripts" / "release-build.sh"
 SHARED = Path(os.environ.get("NXTOS_REPO", Path.home() / "Documents" / "Coding Projects" / "nxtos")) / "scripts" / "plugin_release_build.py"
 
 
@@ -26,17 +30,6 @@ def _source_version() -> str:
                 if isinstance(n, ast.Assign) and n.targets[0].id == "__version__")
 
 
-def test_wrapper_is_executable_and_names_this_repo():
-    assert os.access(WRAPPER, os.X_OK)
-    assert "--repo-name nxthooks" in WRAPPER.read_text()
-
-
-def test_missing_shared_script_fails_with_a_pointer(tmp_path):
-    proc = subprocess.run([str(WRAPPER), "--out", str(tmp_path)], capture_output=True, text=True,
-                          env={**os.environ, "NXTOS_REPO": str(tmp_path / "absent")})
-    assert proc.returncode == 1 and "NXTOS_REPO" in proc.stderr
-
-
 _TOOLING = subprocess.run(["python3", "-c", "import build, setuptools, wheel"], capture_output=True).returncode == 0
 
 
@@ -45,7 +38,9 @@ _TOOLING = subprocess.run(["python3", "-c", "import build, setuptools, wheel"], 
 def test_build_is_reproducible_and_records_provenance(tmp_path):
     out = tmp_path / "out"
     # --allow-dirty: a working tree under edit still builds its committed HEAD.
-    proc = subprocess.run([str(WRAPPER), "--out", str(out), "--allow-dirty"], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, "-I", str(SHARED), "build", "--repo", str(ROOT),
+                           "--repo-name", "nxthooks", "--out", str(out), "--allow-dirty"],
+                          capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     version = _source_version()
     record = json.loads((out / f"nxthooks-{version}.provenance.json").read_text())
