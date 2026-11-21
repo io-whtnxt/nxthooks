@@ -214,3 +214,21 @@ def test_a_hook_disabled_for_claude_code_does_not_widen_its_stanza(hooks_machine
     assert "Bash" in before_tool
     assert None not in before_tool
     assert lifecycle.matcher_groups_for("before_tool", host, harness="pi") == [None]
+
+
+def test_a_declared_matcher_the_wiring_lacks_is_a_gap(hooks_machine):
+    # T2290: PreToolUse wired for Bash and Write passes the per-event check, yet a
+    # hook on an MCP tool behind it never runs until install rewires
+    host = hooks_machine("claude-code")
+    lifecycle.cc_wire(host, host.home / "runtime", {"before_tool": ["Bash", "Write"], "after_tool": ["Edit"]})
+    expected = {"before_tool": ["Bash", "Write", "mcp__paseo__create_agent"], "after_tool": ["Edit"],
+                "prompt_submit": [None]}
+
+    assert lifecycle.unwired_matchers(host.cc_settings, expected) == {"before_tool": ["mcp__paseo__create_agent"]}
+
+
+def test_a_match_all_stanza_covers_every_declared_matcher(hooks_machine):
+    host = hooks_machine("claude-code")
+    lifecycle.cc_wire(host, host.home / "runtime", {"before_tool": [None]})
+
+    assert lifecycle.unwired_matchers(host.cc_settings, {"before_tool": ["mcp__x", "Bash"]}) == {}

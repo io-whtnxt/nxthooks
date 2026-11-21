@@ -1714,6 +1714,9 @@ def cmd_verify(args, host: Host | None = None) -> int:
             print(f"  [n/a ] {label}  no live hook declares this event")
             continue
         ok &= harness_check("claude-code", label, canonical in wired_events)
+    for canonical, missing in unwired_matchers(host.cc_settings, expected).items():
+        ok &= harness_check("claude-code", f"claude-code matchers ({canonical})", False,
+                            f"declared but not wired: {', '.join(missing)}")
 
     codex_valid, codex_error = True, ""
     try:
@@ -1837,6 +1840,40 @@ def _wired_events(path: Path, vocabulary: dict) -> set[str]:
             if canonical in command:
                 found.add(canonical)
     return found
+
+
+def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[str, list[str]]:
+    """Per event, the tool matchers live hooks declare that no stanza of ours in
+    `path` carries. An event that is wired at all passes `_wired_events`, so a
+    manifest added after install -- `mcp__paseo__create_agent` behind a
+    PreToolUse wired only for Bash and Write -- installed cleanly and never ran
+    (T2290). A match-all stanza covers every matcher.
+    """
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        doc = {}
+    wired: dict[str, set[str | None]] = {}
+    for cc_event, stanzas in (doc.get("hooks") or {}).items():
+        for stanza in stanzas if isinstance(stanzas, list) else []:
+            if not isinstance(stanza, dict):
+                continue
+            for hook in stanza.get("hooks") or []:
+                command = hook.get("command", "") if isinstance(hook, dict) else ""
+                if not owned_command(command, None):
+                    continue
+                for canonical, name in EVENT_TO_CC_ALL.items():
+                    if name == cc_event and canonical in command:
+                        wired.setdefault(canonical, set()).add(stanza.get("matcher"))
+    gaps = {}
+    for canonical, matchers in expected.items():
+        have = wired.get(canonical, set())
+        if None in have:
+            continue
+        missing = sorted(m for m in matchers if m is not None and m not in have)
+        if missing:
+            gaps[canonical] = missing
+    return gaps
 
 
 def _report_overlaps(host: Host, entries: list[dict]) -> None:
