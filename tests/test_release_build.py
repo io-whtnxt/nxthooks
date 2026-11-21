@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SHARED = Path(os.environ.get("NXTOS_REPO", Path.home() / "Documents" / "Coding Projects" / "nxtos")) / "scripts" / "plugin_release_build.py"
+SHARED = Path(os.environ.get("NXTOS_REPO", Path.home() / "Coding" / "nxtos")) / "scripts" / "plugin_release_build.py"
 
 
 def _source_version() -> str:
