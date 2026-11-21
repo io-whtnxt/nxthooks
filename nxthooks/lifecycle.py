@@ -562,9 +562,7 @@ def matcher_groups_for(
             continue
         matchers = entry.get("matchers") or []
         if matchers:
-            # `_validate` does not type matchers; a tool name is a string, so one
-            # is made of whatever a manifest wrote rather than crash the wiring.
-            groups.update(m if isinstance(m, str) else json.dumps(m) for m in matchers)
+            groups.update(matchers)
         else:
             match_all = True
     if match_all:
@@ -1865,8 +1863,9 @@ def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[
                 continue
             hooks_of = stanza.get("hooks")
             matcher = stanza.get("matcher")
+            # A stanza in no shape the harness reads matches nothing.
             if not isinstance(hooks_of, list) or not (matcher is None or isinstance(matcher, str)):
-                continue                # a stanza in no shape the harness reads matches nothing
+                continue
             for hook in hooks_of:
                 command = hook.get("command", "") if isinstance(hook, dict) else ""
                 if not isinstance(command, str) or not owned_command(command, None):
@@ -1879,8 +1878,7 @@ def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[
         have = wired.get(canonical, set())
         if None in have:
             continue
-        # `_validate` does not type matchers, and a report must not crash on one.
-        missing = sorted(str(m) for m in matchers if m is not None and m not in have)
+        missing = sorted(m for m in matchers if m is not None and m not in have)
         if missing:
             gaps[canonical] = missing
     return gaps

@@ -239,7 +239,7 @@ def test_a_settings_file_in_an_unreadable_shape_reports_every_matcher_as_a_gap(t
     settings = tmp_path / "settings.json"
     settings.write_text(content)
 
-    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash", 42]}) == {"before_tool": ["42", "Bash"]}
+    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash", "Write"]}) == {"before_tool": ["Bash", "Write"]}
 
 
 @pytest.mark.parametrize("stanza", ['{"hooks": 5}', '{"matcher": ["Bash"], "hooks": []}', '{"matcher": {"a": 1}, "hooks": [{"command": 3}]}'])
@@ -250,8 +250,9 @@ def test_a_stanza_in_an_unreadable_shape_matches_nothing(tmp_path, stanza):
     assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash"]}) == {"before_tool": ["Bash"]}
 
 
-def test_a_manifest_with_untyped_matchers_still_yields_wiring_groups(monkeypatch):
-    monkeypatch.setattr(lifecycle, "load_manifests", lambda *a, **k: [
-        {"name": "odd", "events": ["before_tool"], "matchers": ["Bash", 42, ["x"]]}])
-
-    assert lifecycle.matcher_groups_for("before_tool") == sorted(["Bash", "42", '["x"]'])
+@pytest.mark.parametrize("matchers", [["Bash", 42], [["x"]], [None], [""], "Bash"])
+def test_a_manifest_with_untyped_matchers_is_refused_at_load(matchers):
+    from nxthooks.manifest import ManifestError, _validate
+    entry = {"name": "odd", "events": ["before_tool"], "source": "/x.py", "matchers": matchers}
+    with pytest.raises(ManifestError, match="matchers"):
+        _validate(entry, "test.toml")
