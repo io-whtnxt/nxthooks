@@ -240,3 +240,18 @@ def test_a_settings_file_in_an_unreadable_shape_reports_every_matcher_as_a_gap(t
     settings.write_text(content)
 
     assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash", 42]}) == {"before_tool": ["42", "Bash"]}
+
+
+@pytest.mark.parametrize("stanza", ['{"hooks": 5}', '{"matcher": ["Bash"], "hooks": []}', '{"matcher": {"a": 1}, "hooks": [{"command": 3}]}'])
+def test_a_stanza_in_an_unreadable_shape_matches_nothing(tmp_path, stanza):
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {"PreToolUse": [' + stanza + ']}}')
+
+    assert lifecycle.unwired_matchers(settings, {"before_tool": ["Bash"]}) == {"before_tool": ["Bash"]}
+
+
+def test_a_manifest_with_untyped_matchers_still_yields_wiring_groups(monkeypatch):
+    monkeypatch.setattr(lifecycle, "load_manifests", lambda *a, **k: [
+        {"name": "odd", "events": ["before_tool"], "matchers": ["Bash", 42, ["x"]]}])
+
+    assert lifecycle.matcher_groups_for("before_tool") == sorted(["Bash", "42", '["x"]'])

@@ -562,7 +562,9 @@ def matcher_groups_for(
             continue
         matchers = entry.get("matchers") or []
         if matchers:
-            groups.update(matchers)
+            # `_validate` does not type matchers; a tool name is a string, so one
+            # is made of whatever a manifest wrote rather than crash the wiring.
+            groups.update(m if isinstance(m, str) else json.dumps(m) for m in matchers)
         else:
             match_all = True
     if match_all:
@@ -1861,13 +1863,17 @@ def unwired_matchers(path: Path, expected: dict[str, list[str | None]]) -> dict[
         for stanza in stanzas if isinstance(stanzas, list) else []:
             if not isinstance(stanza, dict):
                 continue
-            for hook in stanza.get("hooks") or []:
+            hooks_of = stanza.get("hooks")
+            matcher = stanza.get("matcher")
+            if not isinstance(hooks_of, list) or not (matcher is None or isinstance(matcher, str)):
+                continue                # a stanza in no shape the harness reads matches nothing
+            for hook in hooks_of:
                 command = hook.get("command", "") if isinstance(hook, dict) else ""
-                if not owned_command(command, None):
+                if not isinstance(command, str) or not owned_command(command, None):
                     continue
                 for canonical, name in EVENT_TO_CC_ALL.items():
                     if name == cc_event and canonical in command:
-                        wired.setdefault(canonical, set()).add(stanza.get("matcher"))
+                        wired.setdefault(canonical, set()).add(matcher)
     gaps = {}
     for canonical, matchers in expected.items():
         have = wired.get(canonical, set())
