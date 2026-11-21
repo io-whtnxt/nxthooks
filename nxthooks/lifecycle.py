@@ -1662,13 +1662,17 @@ def cmd_verify(args, host: Host | None = None) -> int:
                  str(root))
     ok &= _check("cc transport", (root / "bin" / "cc-dispatch.sh").is_file())
 
-    from .registry import resolve
+    from .registry import resolve, skipped_manifests
 
     entries, collisions = resolve(
         hooks_d=host.hooks_d,
         library=host.library_root,
     )
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")
+    # A manifest refused at load runs nowhere and drops out of every wiring
+    # check below, so the report has to name it (T2290, review 856094e0).
+    for reason in skipped_manifests(library=host.library_root, hooks_d=host.hooks_d):
+        ok &= _check("manifest refused", False, reason)
     pending = [e for e in entries if _source_state(e, host) == "pending"]
     for entry in entries:
         ok &= _check_source(entry, host)

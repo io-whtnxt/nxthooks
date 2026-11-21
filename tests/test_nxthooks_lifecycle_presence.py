@@ -413,3 +413,18 @@ def test_the_installed_transport_is_fail_quiet(hooks_machine, name):
     assert "Run: nxthooks doctor" in text and "nxtos doctor" not in text
     assert "-mmin +60" in text
     assert "{{STATE}}" not in text
+
+
+def test_a_manifest_refused_at_load_is_a_gap_in_verify(hooks_machine, capsys):
+    # T2290, review 856094e0: a refused manifest drops its hook from every
+    # wiring check, so without this line verify read healthy with a guard off.
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    host.hooks_d.mkdir(parents=True, exist_ok=True)
+    (host.hooks_d / "stray.toml").write_text(
+        '[[hook]]\nname = "stray"\nevents = ["before_tool"]\nsource = "/x.py"\nmatchers = ["Write", 42]\n')
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+    assert "[GAP ] manifest refused" in out and "matchers" in out

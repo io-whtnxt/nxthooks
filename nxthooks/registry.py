@@ -13,25 +13,49 @@ from .platform import library_dir
 BUILTIN_DIR = Path(__file__).resolve().parent / "builtin"
 
 
-def _load_dir(directory: Path, tier: str) -> list[dict]:
+def _load_dir(directory: Path, tier: str, skipped: list[str] | None = None) -> list[dict]:
+    """The valid hooks of one directory. Each one skipped is said on stderr and,
+    when `skipped` is given, appended to it: a dropped guard has to reach the
+    verify report, not only a log nobody reads (T2290, review 856094e0)."""
     entries: list[dict] = []
     if not directory.is_dir():
         return entries
+
+    def skip(reason: str) -> None:
+        print(f"[nxthooks] skipping {reason}", file=sys.stderr, flush=True)
+        if skipped is not None:
+            skipped.append(reason)
+
     for path in sorted(directory.glob("*.toml")):
         try:
             with open(path, "rb") as fh:
                 data = tomllib.load(fh)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            print(f"[nxthooks] skipping {path.name}: {exc}", file=sys.stderr, flush=True)
+            skip(f"{path.name}: {exc}")
             continue
         for raw in data.get("hook", []):
             try:
                 entry = _validate(raw, path.name)
             except ManifestError as exc:
-                print(f"[nxthooks] skipping hook: {exc}", file=sys.stderr, flush=True)
+                skip(f"hook: {exc}")
                 continue
             entries.append({**entry, "tier": tier, "origin": str(path)})
     return entries
+
+
+def skipped_manifests(
+    library: Path | None = None,
+    hooks_d: Path | None = None,
+    *,
+    env: dict | None = None,
+    home: Path | str | None = None,
+) -> list[str]:
+    """Why each library or user hook that `resolve` drops was dropped."""
+    skipped: list[str] = []
+    root = library if library is not None else library_dir(env, home)
+    _load_dir(root / "hooks.d", "library", skipped)
+    _load_dir(hooks_d if hooks_d is not None else hooks_d_default(env, home), "user", skipped)
+    return skipped
 
 
 def builtin_manifests() -> list[dict]:

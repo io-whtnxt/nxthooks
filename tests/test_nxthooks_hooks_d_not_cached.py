@@ -2,11 +2,14 @@
 
 import importlib
 
-from nxthooks import manifest
+from nxthooks import manifest, registry
 
 
 def test_hooks_d_follows_the_config_home_after_import(tmp_path, monkeypatch):
     importlib.reload(manifest)
+    # A reload re-creates ManifestError; registry imported the old class and
+    # would no longer catch what _validate raises for every later test.
+    importlib.reload(registry)
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "later"))
 
