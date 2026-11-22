@@ -4,6 +4,7 @@ Reads a ``{"action", "document"}`` request on stdin and answers with the
 schema-declared editable fields plus a revision that changes whenever the
 schema or the code behind it changes. Never writes configuration.
 """
+import argparse
 import hashlib
 import json
 import sys
@@ -61,6 +62,9 @@ def handle(request):
 
 
 def main():
+    if sys.argv[1:] in (["--help"], ["-h"]):
+        argparse.ArgumentParser(description="Read a Native Hooks configuration request as JSON on stdin.").print_help()
+        return 0
     try:
         request = json.loads(sys.stdin.read(4_000_001))
         print(json.dumps({"ok": True, **handle(request)}))
