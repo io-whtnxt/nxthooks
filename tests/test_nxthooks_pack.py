@@ -46,6 +46,14 @@ def test_describe_over_stdin_returns_the_three_editable_paths():
     ]
 
 
+def test_unknown_arguments_preserve_stdin_provider_contract():
+    code, response = run_provider(
+        {"action": "validate", "document": VALID},
+        argv=[sys.executable, str(PACK_PATH), "--bogus", "extra"],
+    )
+    assert code == 0 and response["ok"] is True and response["valid"] is True
+
+
 def test_module_invocation_matches_script_invocation():
     by_path = run_provider({"action": "describe", "document": VALID})
     by_module = run_provider({"action": "describe", "document": VALID},

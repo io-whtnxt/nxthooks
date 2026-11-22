@@ -62,7 +62,7 @@ def handle(request):
 
 
 def main():
-    argparse.ArgumentParser(description="Read a Native Hooks configuration request as JSON on stdin.").parse_args()
+    argparse.ArgumentParser(description="Read a Native Hooks configuration request as JSON on stdin.").parse_known_args()
     try:
         request = json.loads(sys.stdin.read(4_000_001))
         print(json.dumps({"ok": True, **handle(request)}))
