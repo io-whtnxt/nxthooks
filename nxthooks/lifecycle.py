@@ -1672,20 +1672,19 @@ def _refused_remedy(refused: Refused) -> str:
     reader to stop reading the report, which is why a provided source is
     reported `[pend]` rather than as a gap (see `_check_source`).
 
-    A file that still runs one of its hooks never gets told to delete itself:
-    it is guarding at that moment, and the other half of an unreadable remedy
-    is one that destroys something live (review e097e80b). `loaded` is the
-    registry's resolved answer, so a hook another tier took over or this file
-    switched off is not in it (T2359).
+    Recommend repair for a file with retained hooks. The default policy can
+    vary with the working directory, and dispatch accepts custom harness
+    names, so either can allow a hook beyond this report's eligibility check.
     """
-    if refused.loaded:
-        running = (f"fix the refused entries in {refused.path} -- these still "
-                   f"run: {', '.join(refused.loaded)}")
+    if refused.retained:
+        remedy = f"fix the refused entries in {refused.path}"
+        if refused.loaded:
+            remedy += f" -- these still run: {', '.join(refused.loaded)}"
         if refused.tier == "library":
-            return f"{running}; {_LIBRARY_OWNER}"
+            return f"{remedy}; {_LIBRARY_OWNER}"
         if refused.tier == "builtin":
-            return f"{running}; it {_BUILTIN_OWNER}"
-        return running
+            return f"{remedy}; it {_BUILTIN_OWNER}"
+        return remedy
     if refused.tier == "user":
         return (f"fix or delete {refused.path}, or no hook it declares runs; "
                 "`install` will not overwrite it")
@@ -1714,6 +1713,7 @@ def cmd_verify(args, host: Host | None = None, *,
     resolution = load_tiers(
         hooks_d=host.hooks_d,
         library=host.library_root,
+        cfg=cfg,
     )
     entries, collisions = list(resolution.entries), resolution.collisions
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")

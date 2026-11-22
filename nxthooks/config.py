@@ -83,6 +83,10 @@ def load_config(cwd: str | None = None, env: dict | None = None,
     return cfg
 
 
+def hook_policy(entry: dict, cfg: dict) -> str:
+    return entry.get("policy") or cfg["policy"]["default"]
+
+
 def resolve_root(cfg: dict, env: dict | None = None,
                  home: Path | str | None = None) -> Path:
     """An unset root means "wherever this platform puts application data".

@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 
 from . import CANONICAL_EVENTS, HARNESSES, __version__
-from .config import load_config, scope_allows
+from .config import hook_policy, load_config, scope_allows
 from .manifest import harness_enabled, load_manifests, matcher_matches, source_path
 from .platform import state_dir
 
@@ -288,9 +288,8 @@ def select_hooks(
         cwd = envelope["cwd"] or os.getcwd()
         if not scope_allows(cfg, cwd):
             continue
-        # The manifest's own policy wins; without one, the configured default.
         # "off" is not a softer advise: the hook does not run.
-        policy = entry.get("policy") or cfg["policy"]["default"]
+        policy = hook_policy(entry, cfg)
         if policy == "off":
             continue
         yield {**entry, "policy": policy}
