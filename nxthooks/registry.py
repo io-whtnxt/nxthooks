@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .manifest import ManifestError, _validate, hooks_d_default
@@ -43,7 +43,9 @@ class Refused:
     install` never writes the library tier, and the builtin tier ships inside
     the package -- and `loaded` names the hooks the same file still
     contributes, because a file that still runs a guard is never a file to
-    delete.
+    delete. It is narrowed by `_narrow_loaded` once the tiers are resolved: a
+    name there is read as "this guard is live", so a hook another tier took
+    over, or one this file switched off, does not belong in it (T2359).
     """
 
     tier: str
@@ -72,6 +74,9 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
     d0cf8532). Each is still said once here: stderr is the only channel the
     dispatch path has, and a dropped guard has to reach it rather than only a
     log nobody reads (T2290, review 856094e0).
+
+    A refused manifest's `loaded` is what this one directory accepted from it,
+    which is not yet what runs: `load_tiers` narrows it with `_narrow_loaded`.
     """
     entries: list[dict] = []
     refused: list[Refused] = []
@@ -122,6 +127,37 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
     return entries, refused
 
 
+def _dispatches(entry: dict) -> bool:
+    """Whether this hook dispatches, from what its own manifest says.
+
+    The two gates in `dispatch.select_hooks` a manifest decides by itself:
+    `enabled = false` is skipped outright, and the manifest's own
+    `policy = "off"` outranks the configured default -- "off is not a softer
+    advise: the hook does not run". A per-harness opt-out decides nothing
+    here: a hook pi opts out of still runs on the other harnesses.
+    """
+    return bool(entry.get("enabled", True)) and entry.get("policy") != "off"
+
+
+def _narrow_loaded(refused: Refused, entries: tuple[dict, ...]) -> Refused:
+    """The refused manifest's own hooks, restricted to the ones still live.
+
+    `loaded` is read as "these guards are running", so it is said against the
+    resolution rather than against the file: a hook the user tier declares and
+    the library tier keeps runs from the library file, and a hook the file
+    disables runs nowhere -- naming either reassured an operator about a guard
+    that is not guarding (T2359). Two files can hold one name and one name can
+    live in two tiers, so the pair that identifies a hook of *this* file is
+    tier plus origin. Filtered rather than rebuilt, so the names stay in the
+    order the manifest declared them.
+    """
+    home = (refused.tier, str(refused.path))
+    live = {e["name"] for e in entries
+            if (e["tier"], e["origin"]) == home and _dispatches(e)}
+    kept = tuple(name for name in refused.loaded if name in live)
+    return replace(refused, loaded=kept)
+
+
 def builtin_manifests() -> list[dict]:
     return _load_dir(BUILTIN_DIR, "builtin")[0]
 
@@ -162,10 +198,13 @@ def load_tiers(
             continue
         resolved[entry["name"]] = entry
 
+    entries = tuple(resolved[k] for k in sorted(resolved))
     return Resolution(
-        entries=tuple(resolved[k] for k in sorted(resolved)),
+        entries=entries,
         collisions=tuple(collisions),
-        refused=(*builtin_refused, *library_refused, *user_refused),
+        refused=tuple(_narrow_loaded(r, entries)
+                      for r in (*builtin_refused, *library_refused,
+                                *user_refused)),
     )
 
 
