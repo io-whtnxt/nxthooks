@@ -1656,22 +1656,29 @@ def _report_projections(host: Host) -> bool:
 
 
 def _refused_remedy(refused: Refused) -> str:
-    """The line after a refusal, naming the file to open and who can write it.
+    """The line after a refusal: what to do with the file, and who can write it.
 
     `install` used to be the only advice, and it is the wrong verb for a file
     `install` never overwrites: it seeds manifests that are missing and leaves
     every manifest that exists alone. A remedy that cannot work trains its
     reader to stop reading the report, which is why a provided source is
     reported `[pend]` rather than as a gap (see `_check_source`).
+
+    A file that still loads some of its hooks never gets told to delete
+    itself: it is running a guard at that moment, and the other half of an
+    unreadable remedy is one that destroys something live (review e097e80b).
     """
+    if refused.loaded:
+        return (f"fix the refused entries in {refused.path} -- these still "
+                f"run: {', '.join(refused.loaded)}")
     if refused.tier == "user":
         return (f"fix or delete {refused.path}, or no hook it declares runs; "
                 "`install` will not overwrite it")
     if refused.tier == "library":
         return (f"fix or delete {refused.path} -- the library tier belongs to "
                 "whichever component installed it")
-    return (f"{refused.path} ships inside this package; reinstall NxtHooks to "
-            "replace it")
+    return (f"{refused.path} ships inside this package; reinstall NxtHooks "
+            "to replace it")
 
 
 def cmd_verify(args, host: Host | None = None, *,
@@ -1706,12 +1713,16 @@ def cmd_verify(args, host: Host | None = None, *,
     # the library or builtin tier names a file `install` never writes and never
     # overwrites: failing there sent it out exit 1 over somebody else's
     # manifest, advising the one command that could not fix it. Such a refusal
-    # is still said, with the same remedy line, and counted in the summary.
+    # is still said, with the same remedy line, and counted in the summary; a
+    # refusal in the fatal set is what holds the run at exit 1, through
+    # `refused_fatal` below rather than `ok`.
     elsewhere = 0
+    refused_fatal: list[Path] = []
     for refused in resolution.refused:
         reason = f"[{refused.tier}] {refused.detail}"
         if refused.tier in fatal_refusal_tiers:
-            ok &= _check("manifest refused", False, reason)
+            _check("manifest refused", False, reason)
+            refused_fatal.append(refused.path)
         else:
             print(f"  [warn] manifest refused  {reason}")
             elsewhere += 1
@@ -1792,8 +1803,19 @@ def cmd_verify(args, host: Host | None = None, *,
 
     print()
     print(CAPABILITY_MATRIX)
-    if not ok:
-        print("\nresult: GAPS FOUND — run `python3 -m nxthooks install` to repair.")
+    if not ok or refused_fatal:
+        # Each gap gets the remedy it actually has. `install` writes the
+        # runtime and the wiring and never overwrites a manifest, so ordering
+        # it at a refused manifest is the loop this report exists to close
+        # (review e097e80b, T2337): the files are named here and their own
+        # remedy lines are above.
+        advice = []
+        if refused_fatal:
+            advice.append("fix the refused manifests: "
+                          + ", ".join(dict.fromkeys(str(p) for p in refused_fatal)))
+        if not ok:
+            advice.append("run `python3 -m nxthooks install` to repair")
+        print("\nresult: GAPS FOUND — " + ", and ".join(advice) + ".")
         return 1
     # Exit code unchanged: neither a pending source nor a shadowed user hook is
     # a gap. The sentence has to count them anyway -- "all wiring resolves"

@@ -31,8 +31,13 @@
   on a refusal in any tier; `install` answers only for the user `hooks.d` it
   seeds, and says a library or builtin refusal — a file it never writes — as a
   `warn` with the file to fix, counted in the summary, so an install that
-  worked no longer exits 1 over somebody else's manifest (`README.md`,
-  Lifecycle).
+  worked no longer exits 1 over somebody else's manifest. A refusal is now one
+  report line per file, listing every entry it refused; a file that still
+  loads a hook is told to fix those entries instead of deleting a guard that
+  is running; an entry that is not a table costs only itself; and the
+  `GAPS FOUND` summary names the refused manifests by path rather than
+  ordering `install` at a file `install` never overwrites (review e097e80b,
+  `README.md` Lifecycle).
 
 ## 0.2.2
 

@@ -208,7 +208,11 @@ builtin refusal names a file `install` never writes and never overwrites —
 there it is reported `warn` with the same remedy and counted in the summary,
 instead of exiting 1 over somebody else's manifest with advice that could not
 be followed. One pass over the three tiers produces the hooks, the collisions
-and the refusals together, so no refusal is reported twice.
+and the refusals together, so no refusal is reported twice. A refusal is one
+line for one file, listing every entry it refused and naming the hooks that
+file still runs — a manifest with a live hook is fixed, never deleted. And the
+gap summary names the remedy each gap actually has: refused manifests by path,
+and `install` for the runtime and wiring it can repair.
 
 **Uninstall is complete.** Every ledger slot is unwired, every owned
 directory and marker file removed, the runtime root deleted, the config kept

@@ -33,17 +33,23 @@ class Collision:
 
 @dataclass(frozen=True)
 class Refused:
-    """A manifest one tier offered that the loader would not take.
+    """A manifest one tier offered that the loader would not take -- the whole
+    file, or only the entries named in `detail`.
 
-    Carries its tier and its file because the remedy differs by both: an
-    operator fixes their own `hooks.d`, `nxthooks install` never writes the
-    library tier, and the builtin tier ships inside the package (T2337,
-    review d0cf8532).
+    One record per file, because the report, the remedy and the exit code all
+    speak per file: two refusals of one file read as two files (review
+    e097e80b, T2337). It carries its tier and its file because the remedy
+    differs by both -- an operator fixes their own `hooks.d`, `nxthooks
+    install` never writes the library tier, and the builtin tier ships inside
+    the package -- and `loaded` names the hooks the same file still
+    contributes, because a file that still runs a guard is never a file to
+    delete.
     """
 
     tier: str
     path: Path
     detail: str
+    loaded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,8 +78,8 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
     if not directory.is_dir():
         return entries, refused
 
-    def skip(path: Path, detail: str) -> None:
-        refused.append(Refused(tier, path, detail))
+    def skip(path: Path, detail: str, loaded: tuple[str, ...] = ()) -> None:
+        refused.append(Refused(tier, path, detail, loaded))
         print(f"[nxthooks] skipping {tier} manifest: {detail}", file=sys.stderr, flush=True)
 
     for path in sorted(directory.glob("*.toml")):
@@ -92,16 +98,27 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
             skip(path, f"{path.name}: 'hook' must be an array of [[hook]] "
                        f"tables, found {type(declared).__name__}")
             continue
-        if not all(isinstance(raw, dict) for raw in declared):
-            skip(path, f"{path.name}: every 'hook' entry must be a table")
-            continue
-        for raw in declared:
+        loaded: list[str] = []
+        rejected: list[str] = []
+        for position, raw in enumerate(declared, start=1):
+            if not isinstance(raw, dict):
+                rejected.append(f"{path.name}: [[hook]] entry {position} is "
+                                "not a table")
+                continue
             try:
                 entry = _validate(raw, path.name)
             except ManifestError as exc:
-                skip(path, str(exc))
+                rejected.append(str(exc))
                 continue
+            loaded.append(entry["name"])
             entries.append({**entry, "tier": tier, "origin": str(path)})
+        if rejected:
+            # Said once for the file, with every entry it refused: the operator
+            # fixes one file, and the report counts one gap.
+            skip(path, rejected[0] if len(rejected) == 1 else
+                 f"{path.name}: {len(rejected)} of {len(declared)} hooks refused "
+                 f"-- {'; '.join(rejected)}",
+                 tuple(loaded))
     return entries, refused
 
 
