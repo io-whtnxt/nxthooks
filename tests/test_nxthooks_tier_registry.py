@@ -194,6 +194,60 @@ def test_a_bad_entry_refuses_itself_and_not_its_siblings(tmp_path, monkeypatch):
     assert "not a table" in by_file["inline.toml"].detail
 
 
+def test_loaded_names_only_the_hooks_the_resolution_kept(tmp_path, monkeypatch):
+    """`loaded` becomes the line "these still run", so every name in it is a
+    promise. The loader could only say what a file declared and validated: the
+    user copy of a hook the library tier keeps runs from the *library* file,
+    and the manifest that lost it was still credited with running it (T2359).
+    """
+    library = tmp_path / "library" / "hooks.d"
+    user = tmp_path / "user"
+    _write(library, "shared", "library.sh")
+    user.mkdir()
+    (user / "partials.toml").write_text(
+        '[[hook]]\nname = "shared"\nevents = ["after_tool"]\nsource = "/user-copy.sh"\n'
+        '[[hook]]\nname = "bad"\nevents = ["after_tool"]\nsource = "/bad"\nmatchers = [42]\n'
+        '[[hook]]\nname = "own"\nevents = ["after_tool"]\nsource = "/own.sh"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(registry, "BUILTIN_DIR", tmp_path / "no-builtin")
+
+    result = registry.load_tiers(library=library.parent, hooks_d=user)
+
+    partial = next(r for r in result.refused if r.path.name == "partials.toml")
+    assert partial.loaded == ("own",)
+    assert "bad" in partial.detail
+    assert {e["name"]: e["tier"] for e in result.entries} == {"shared": "library",
+                                                              "own": "user"}
+    assert result.collisions == (
+        registry.Collision("shared", "user", "library",
+                           str(user / "partials.toml")),
+    )
+
+
+def test_loaded_excludes_what_the_manifest_itself_switched_off(tmp_path, monkeypatch):
+    """`select_hooks` skips a disabled hook and a hook whose own policy is
+    "off", so neither runs at all. Naming one under "these still run" sends an
+    operator who is already worried to check a guard that is not guarding
+    (T2359).
+    """
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "mixed.toml").write_text(
+        '[[hook]]\nname = "muted"\nevents = ["after_tool"]\nsource = "/muted.sh"\nenabled = false\n'
+        '[[hook]]\nname = "off"\nevents = ["after_tool"]\nsource = "/off.sh"\npolicy = "off"\n'
+        '[[hook]]\nname = "live"\nevents = ["after_tool"]\nsource = "/live.sh"\n'
+        '[[hook]]\nname = "bad"\nevents = ["not_an_event"]\nsource = "/bad"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(registry, "BUILTIN_DIR", tmp_path / "no-builtin")
+
+    result = registry.load_tiers(library=tmp_path / "no-library", hooks_d=user)
+
+    assert next(r for r in result.refused
+                if r.path.name == "mixed.toml").loaded == ("live",)
+
+
 def test_host_resolution_uses_the_host_data_root_for_library_manifests(tmp_path, monkeypatch):
     builtin = tmp_path / "builtin"
     _write(builtin, "built", "built.sh")

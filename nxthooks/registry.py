@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .manifest import ManifestError, _validate, hooks_d_default
+from . import HARNESSES
+from .config import DEFAULTS, hook_policy
+from .manifest import ManifestError, _validate, harness_enabled, hooks_d_default
 from .platform import library_dir
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "builtin"
@@ -41,15 +43,16 @@ class Refused:
     e097e80b, T2337). It carries its tier and its file because the remedy
     differs by both -- an operator fixes their own `hooks.d`, `nxthooks
     install` never writes the library tier, and the builtin tier ships inside
-    the package -- and `loaded` names the hooks the same file still
-    contributes, because a file that still runs a guard is never a file to
-    delete.
+    the package. After resolution, `loaded` names hooks the file contributes
+    under the current policy on a known harness. `retained` also protects
+    hooks that could become eligible in a different context (T2359).
     """
 
     tier: str
     path: Path
     detail: str
     loaded: tuple[str, ...] = ()
+    retained: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
     d0cf8532). Each is still said once here: stderr is the only channel the
     dispatch path has, and a dropped guard has to reach it rather than only a
     log nobody reads (T2290, review 856094e0).
+
+    A refused manifest's `loaded` is what this one directory accepted from it.
+    `load_tiers` narrows it after resolution.
     """
     entries: list[dict] = []
     refused: list[Refused] = []
@@ -122,24 +128,33 @@ def _load_dir(directory: Path, tier: str) -> tuple[list[dict], list[Refused]]:
     return entries, refused
 
 
+def _eligible(entry: dict, cfg: dict) -> bool:
+    return (hook_policy(entry, cfg) != "off"
+            and isinstance(entry.get("harnesses") or {}, dict)
+            and any(harness_enabled(entry, h) for h in HARNESSES))
+
+
+def _narrow_loaded(refused: Refused, entries: tuple[dict, ...], cfg: dict) -> Refused:
+    """Keep eligible hooks from this exact file, in declaration order."""
+    home = (refused.tier, str(refused.path))
+    retained = [e for e in entries if (e["tier"], e["origin"]) == home
+                and e.get("enabled", True) and e.get("policy") != "off"]
+    live = {e["name"] for e in retained if _eligible(e, cfg)}
+    kept = tuple(name for name in refused.loaded if name in live)
+    return replace(refused, loaded=kept, retained=bool(retained))
+
+
 def builtin_manifests() -> list[dict]:
     return _load_dir(BUILTIN_DIR, "builtin")[0]
 
 
-def load_tiers(
+def _resolve_tiers(
     library: Path | None = None,
     hooks_d: Path | None = None,
     *,
     env: dict | None = None,
     home: Path | str | None = None,
 ) -> Resolution:
-    """The whole registry in one pass: builtin, library, user, and the
-    manifests each of the three had to refuse.
-
-    `resolve` is the projection for a caller that only wants the hooks to run;
-    the report takes everything from here, which is why the refusal of a
-    builtin or library manifest reaches it at all.
-    """
     root = library if library is not None else library_dir(env, home)
     user_dir = hooks_d if hooks_d is not None else hooks_d_default(env, home)
     builtin, builtin_refused = _load_dir(BUILTIN_DIR, "builtin")
@@ -162,11 +177,29 @@ def load_tiers(
             continue
         resolved[entry["name"]] = entry
 
+    entries = tuple(resolved[k] for k in sorted(resolved))
     return Resolution(
-        entries=tuple(resolved[k] for k in sorted(resolved)),
+        entries=entries,
         collisions=tuple(collisions),
         refused=(*builtin_refused, *library_refused, *user_refused),
     )
+
+
+def load_tiers(
+    library: Path | None = None,
+    hooks_d: Path | None = None,
+    *,
+    env: dict | None = None,
+    home: Path | str | None = None,
+    cfg: dict | None = None,
+) -> Resolution:
+    """Resolve all tiers and assess refusals for the supplied diagnostic config."""
+    resolution = _resolve_tiers(library, hooks_d, env=env, home=home)
+    cfg = DEFAULTS if cfg is None else cfg
+    return replace(resolution, refused=tuple(
+        _narrow_loaded(refused, resolution.entries, cfg)
+        for refused in resolution.refused
+    ))
 
 
 def resolve(
@@ -181,7 +214,7 @@ def resolve(
     The refused manifests are not part of this view -- `load_tiers` returns
     them, and `_load_dir` says each one on stderr as it is dropped.
     """
-    resolution = load_tiers(library, hooks_d, env=env, home=home)
+    resolution = _resolve_tiers(library, hooks_d, env=env, home=home)
     return list(resolution.entries), resolution.collisions
 
 

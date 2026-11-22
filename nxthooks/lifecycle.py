@@ -1655,6 +1655,14 @@ def _report_projections(host: Host) -> bool:
     return report.exit_code == 0
 
 
+#: Who may write a tier's manifests. Said with the remedy because the tier
+#: decides the verb, and it stays said when the file still runs a hook: being
+#: somebody else's file is the part of the remedy an operator cannot guess
+#: (T2359).
+_LIBRARY_OWNER = "the library tier belongs to whichever component installed it"
+_BUILTIN_OWNER = "ships inside this package; reinstall NxtHooks to replace it"
+
+
 def _refused_remedy(refused: Refused) -> str:
     """The line after a refusal: what to do with the file, and who can write it.
 
@@ -1664,21 +1672,25 @@ def _refused_remedy(refused: Refused) -> str:
     reader to stop reading the report, which is why a provided source is
     reported `[pend]` rather than as a gap (see `_check_source`).
 
-    A file that still loads some of its hooks never gets told to delete
-    itself: it is running a guard at that moment, and the other half of an
-    unreadable remedy is one that destroys something live (review e097e80b).
+    Recommend repair for a file with retained hooks. The default policy can
+    vary with the working directory, and dispatch accepts custom harness
+    names, so either can allow a hook beyond this report's eligibility check.
     """
-    if refused.loaded:
-        return (f"fix the refused entries in {refused.path} -- these still "
-                f"run: {', '.join(refused.loaded)}")
+    if refused.retained:
+        remedy = f"fix the refused entries in {refused.path}"
+        if refused.loaded:
+            remedy += f" -- these still run: {', '.join(refused.loaded)}"
+        if refused.tier == "library":
+            return f"{remedy}; {_LIBRARY_OWNER}"
+        if refused.tier == "builtin":
+            return f"{remedy}; it {_BUILTIN_OWNER}"
+        return remedy
     if refused.tier == "user":
         return (f"fix or delete {refused.path}, or no hook it declares runs; "
                 "`install` will not overwrite it")
     if refused.tier == "library":
-        return (f"fix or delete {refused.path} -- the library tier belongs to "
-                "whichever component installed it")
-    return (f"{refused.path} ships inside this package; reinstall NxtHooks "
-            "to replace it")
+        return f"fix or delete {refused.path} -- {_LIBRARY_OWNER}"
+    return f"{refused.path} {_BUILTIN_OWNER}"
 
 
 def cmd_verify(args, host: Host | None = None, *,
@@ -1701,6 +1713,7 @@ def cmd_verify(args, host: Host | None = None, *,
     resolution = load_tiers(
         hooks_d=host.hooks_d,
         library=host.library_root,
+        cfg=cfg,
     )
     entries, collisions = list(resolution.entries), resolution.collisions
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")

@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from nxthooks import lifecycle
+from nxthooks import HARNESSES, lifecycle, registry
 from nxthooks.dispatch import aggregate, run_hook
 from nxthooks.projection import live_slots
 
@@ -543,6 +543,145 @@ def test_a_manifest_that_still_loads_a_hook_is_told_to_fix_not_delete(
     assert f"fix the refused entries in {mixed}" in out
     assert "these still run: live" in out
     assert "fix or delete" not in out
+
+
+def test_a_partly_valid_library_manifest_keeps_who_owns_the_file(
+    hooks_machine, capsys
+):
+    """The fix-not-delete line replaced the whole remedy, so a library file
+    that still ran one guard lost the half of the sentence that says `install`
+    never writes it -- and went back to being repaired by the one command that
+    cannot (T2359).
+    """
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    theirs = host.library_root / "hooks.d"
+    theirs.mkdir(parents=True)
+    (theirs / "theirs.toml").write_text(
+        '[[hook]]\nname = "theirs-live"\nevents = ["before_tool"]\n'
+        'source = "/theirs.sh"\nmatchers = ["Write"]\n'
+        '[[hook]]\nname = "theirs-bad"\nevents = ["before_tool"]\n'
+        'source = "/x.py"\nmatchers = ["Write", 42]\n'
+    )
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert "these still run: theirs-live" in out
+    assert "the library tier belongs to whichever component installed it" in out
+    assert f"fix or delete {theirs / 'theirs.toml'}" not in out
+
+
+def test_a_partly_valid_builtin_manifest_still_says_reinstall(
+    hooks_machine, capsys, monkeypatch, tmp_path
+):
+    """The builtin tier ships inside the package, so reinstalling was always
+    its remedy -- and the fix-not-delete line replaced that half, leaving the
+    operator to hand-edit a file the next release overwrites (T2359)."""
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    source = host.home / "shipped.sh"
+    source.write_text("#!/bin/sh\n", encoding="utf-8")
+    (builtin / "shipped.toml").write_text(
+        f'[[hook]]\nname = "shipped-live"\nevents = ["before_tool"]\n'
+        f'source = "{source}"\nmatchers = ["Write"]\n'
+        '[[hook]]\nname = "shipped-bad"\nevents = ["not_an_event"]\n'
+        'source = "/x.py"\n'
+    )
+    monkeypatch.setattr(registry, "BUILTIN_DIR", builtin)
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert "these still run: shipped-live" in out
+    assert ("it ships inside this package; reinstall NxtHooks to replace it"
+            in out)
+
+
+def test_a_refused_manifest_whose_hooks_are_off_is_not_reported_live(
+    hooks_machine, capsys
+):
+    """The other direction of the same lie: the one hook this user manifest
+    still loads switched itself off, so nothing of it runs, and the line that
+    reassured the operator that a guard was live named one that never fires.
+    """
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    host.hooks_d.mkdir(parents=True, exist_ok=True)
+    mixed = host.hooks_d / "quiet.toml"
+    mixed.write_text(
+        '[[hook]]\nname = "muted"\nevents = ["before_tool"]\n'
+        'source = "/muted.sh"\nenabled = false\n'
+        '[[hook]]\nname = "bad"\nevents = ["before_tool"]\n'
+        'source = "/x.py"\nmatchers = ["Write", 42]\n'
+    )
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert "these still run" not in out
+    assert f"fix or delete {mixed}" in out
+
+
+def test_refusal_report_uses_the_project_default_and_keeps_explicit_policy(
+    hooks_machine, capsys, monkeypatch, tmp_path
+):
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    project = tmp_path / "project"
+    (project / ".nxt").mkdir(parents=True)
+    (project / ".nxt" / "hooks.toml").write_text('[policy]\ndefault = "off"\n')
+    monkeypatch.chdir(project)
+    inherited = host.hooks_d / "inherited.toml"
+    inherited.write_text(
+        '[[hook]]\nname = "inherited"\nevents = ["before_tool"]\n'
+        'source = "/inherited.sh"\n'
+        + _refusing_manifest("bad-inherited")
+    )
+    override = host.hooks_d / "override.toml"
+    override.write_text(
+        '[[hook]]\nname = "override"\nevents = ["before_tool"]\n'
+        'source = "/override.sh"\npolicy = "enforce"\n'
+        + _refusing_manifest("bad-override")
+    )
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert f"fix the refused entries in {inherited}\n" in out
+    assert f"fix or delete {inherited}" not in out
+    assert "these still run: inherited" not in out
+    assert "these still run: override" in out
+
+
+def test_refusal_report_requires_at_least_one_enabled_known_harness(
+    hooks_machine, capsys
+):
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    mixed = host.hooks_d / "mixed.toml"
+    mixed.write_text(
+        '[[hook]]\nname = "opted-out"\nevents = ["before_tool"]\n'
+        'source = "/opted-out.sh"\n'
+        + "".join(f'[hook.harnesses.{h}]\nenabled = false\n' for h in HARNESSES)
+        + '[[hook]]\nname = "muse-only"\nevents = ["before_tool"]\n'
+        'source = "/muse-only.sh"\n'
+        + "".join(f'[hook.harnesses.{h}]\nenabled = false\n' for h in HARNESSES
+                  if h != "muse")
+        + _refusing_manifest("bad")
+    )
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert "these still run: muse-only\n" in out
 
 
 def test_the_gap_summary_names_the_refused_manifest_instead_of_install(
