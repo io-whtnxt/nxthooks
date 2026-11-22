@@ -25,6 +25,7 @@ def run_provider(payload, argv=None, cwd=None):
 @pytest.mark.parametrize("argv", [
     [sys.executable, "-m", "nxthooks.pack", "--help"],
     [sys.executable, str(PACK_PATH), "--help"],
+    [sys.executable, str(PACK_PATH), "-h"],
 ])
 def test_help_exits_without_reading_stdin(argv):
     process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -46,10 +47,14 @@ def test_describe_over_stdin_returns_the_three_editable_paths():
     ]
 
 
-def test_unknown_arguments_preserve_stdin_provider_contract():
+@pytest.mark.parametrize("extra", [
+    ["--bogus", "extra"], ["--h"], ["-hfoo"], ["--help=foo"],
+    ["--", "--help"], ["--help", "extra"],
+])
+def test_unknown_arguments_preserve_stdin_provider_contract(extra):
     code, response = run_provider(
         {"action": "validate", "document": VALID},
-        argv=[sys.executable, str(PACK_PATH), "--bogus", "extra"],
+        argv=[sys.executable, str(PACK_PATH), *extra],
     )
     assert code == 0 and response["ok"] is True and response["valid"] is True
 
