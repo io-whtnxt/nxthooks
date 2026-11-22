@@ -22,6 +22,22 @@ def run_provider(payload, argv=None, cwd=None):
     return completed.returncode, json.loads(completed.stdout)
 
 
+@pytest.mark.parametrize("argv", [
+    [sys.executable, "-m", "nxthooks.pack", "--help"],
+    [sys.executable, str(PACK_PATH), "--help"],
+])
+def test_help_exits_without_reading_stdin(argv):
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        assert process.wait(timeout=15) == 0
+        assert "usage:" in process.stdout.read().lower()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate()
+
+
 def test_describe_over_stdin_returns_the_three_editable_paths():
     code, response = run_provider({"action": "describe", "document": VALID})
     assert code == 0 and response["ok"] is True
