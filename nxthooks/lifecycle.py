@@ -82,7 +82,7 @@ from .delivery import deliver, withdraw
 from .contract import version_key
 from .config import load_config, resolve_root, user_config_path
 from .manifest import harness_enabled, load_manifests
-from .registry import builtin_manifests, render_collisions
+from .registry import Refused, builtin_manifests, load_tiers, render_collisions
 from .platform import COMPONENT, cache_dir, config_dir, data_dir, state_dir
 
 #: What NxtHooks 0.1 wrote instead of a marker. Recognised on unwire through
@@ -1371,7 +1371,11 @@ def cmd_install(args, host: Host | None = None) -> int:
           else f"pane installed      {written}")
 
     print("\nverify:")
-    return cmd_verify(args, host)
+    # Only the tier `install` seeds counts against it: it seeds manifests that
+    # are missing and writes nothing in the library or builtin tier, so a
+    # refusal there is named with its remedy but is not this verb's failure.
+    # `verify` and `doctor` keep the default and fail on any refusal.
+    return cmd_verify(args, host, fatal_refusal_tiers=frozenset({"user"}))
 
 
 def _remove_owned_paths(host: Host) -> list[str]:
@@ -1651,7 +1655,39 @@ def _report_projections(host: Host) -> bool:
     return report.exit_code == 0
 
 
-def cmd_verify(args, host: Host | None = None) -> int:
+def _refused_remedy(refused: Refused) -> str:
+    """The line after a refusal: what to do with the file, and who can write it.
+
+    `install` used to be the only advice, and it is the wrong verb for a file
+    `install` never overwrites: it seeds manifests that are missing and leaves
+    every manifest that exists alone. A remedy that cannot work trains its
+    reader to stop reading the report, which is why a provided source is
+    reported `[pend]` rather than as a gap (see `_check_source`).
+
+    A file that still loads some of its hooks never gets told to delete
+    itself: it is running a guard at that moment, and the other half of an
+    unreadable remedy is one that destroys something live (review e097e80b).
+    """
+    if refused.loaded:
+        return (f"fix the refused entries in {refused.path} -- these still "
+                f"run: {', '.join(refused.loaded)}")
+    if refused.tier == "user":
+        return (f"fix or delete {refused.path}, or no hook it declares runs; "
+                "`install` will not overwrite it")
+    if refused.tier == "library":
+        return (f"fix or delete {refused.path} -- the library tier belongs to "
+                "whichever component installed it")
+    return (f"{refused.path} ships inside this package; reinstall NxtHooks "
+            "to replace it")
+
+
+def cmd_verify(args, host: Host | None = None, *,
+               fatal_refusal_tiers: frozenset = frozenset(
+                   {"builtin", "library", "user"})) -> int:
+    """`fatal_refusal_tiers` is the exit-code policy for a manifest the
+    registry refused, and only `install` narrows it -- see the comment where
+    the refusals are reported.
+    """
     host = host or Host.local()
     cfg = host.config()
     root = host.root(cfg)
@@ -1662,17 +1698,35 @@ def cmd_verify(args, host: Host | None = None) -> int:
                  str(root))
     ok &= _check("cc transport", (root / "bin" / "cc-dispatch.sh").is_file())
 
-    from .registry import resolve, skipped_manifests
-
-    entries, collisions = resolve(
+    resolution = load_tiers(
         hooks_d=host.hooks_d,
         library=host.library_root,
     )
+    entries, collisions = list(resolution.entries), resolution.collisions
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")
     # A manifest refused at load runs nowhere and drops out of every wiring
     # check below, so the report has to name it (T2290, review 856094e0).
-    for reason in skipped_manifests(library=host.library_root, hooks_d=host.hooks_d):
-        ok &= _check("manifest refused", False, reason)
+    #
+    # Exit-code policy (T2337, review d0cf8532): a refused manifest is a guard
+    # that runs nowhere, so `verify` and `doctor` fail on one wherever it lives,
+    # in any tier. `install` passes the user tier alone, because a refusal in
+    # the library or builtin tier names a file `install` never writes and never
+    # overwrites: failing there sent it out exit 1 over somebody else's
+    # manifest, advising the one command that could not fix it. Such a refusal
+    # is still said, with the same remedy line, and counted in the summary; a
+    # refusal in the fatal set is what holds the run at exit 1, through
+    # `refused_fatal` below rather than `ok`.
+    elsewhere = 0
+    refused_fatal: list[Path] = []
+    for refused in resolution.refused:
+        reason = f"[{refused.tier}] {refused.detail}"
+        if refused.tier in fatal_refusal_tiers:
+            _check("manifest refused", False, reason)
+            refused_fatal.append(refused.path)
+        else:
+            print(f"  [warn] manifest refused  {reason}")
+            elsewhere += 1
+        print(f"         {_refused_remedy(refused)}")
     pending = [e for e in entries if _source_state(e, host) == "pending"]
     for entry in entries:
         ok &= _check_source(entry, host)
@@ -1749,8 +1803,19 @@ def cmd_verify(args, host: Host | None = None) -> int:
 
     print()
     print(CAPABILITY_MATRIX)
-    if not ok:
-        print("\nresult: GAPS FOUND — run `python3 -m nxthooks install` to repair.")
+    if not ok or refused_fatal:
+        # Each gap gets the remedy it actually has. `install` writes the
+        # runtime and the wiring and never overwrites a manifest, so ordering
+        # it at a refused manifest is the loop this report exists to close
+        # (review e097e80b, T2337): the files are named here and their own
+        # remedy lines are above.
+        advice = []
+        if refused_fatal:
+            advice.append("fix the refused manifests: "
+                          + ", ".join(dict.fromkeys(str(p) for p in refused_fatal)))
+        if not ok:
+            advice.append("run `python3 -m nxthooks install` to repair")
+        print("\nresult: GAPS FOUND — " + ", and ".join(advice) + ".")
         return 1
     # Exit code unchanged: neither a pending source nor a shadowed user hook is
     # a gap. The sentence has to count them anyway -- "all wiring resolves"
@@ -1764,6 +1829,8 @@ def cmd_verify(args, host: Host | None = None) -> int:
         notes.append(f"{len(collisions)} user hook(s) shadowed")
     if runtime_failures:
         notes.append(f"{len(runtime_failures)} hook(s) failing at runtime")
+    if elsewhere:
+        notes.append(f"{elsewhere} manifest refused outside this install's tier")
     detail = f" ({', '.join(notes)})" if notes else ""
     print(f"\nresult: all wiring resolves{detail}.")
     return 0

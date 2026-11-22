@@ -2,6 +2,8 @@
 
 import textwrap
 
+import pytest
+
 from nxthooks import manifest, registry
 from nxthooks.lifecycle import Host
 
@@ -59,6 +61,137 @@ def test_load_manifests_uses_the_resolver_and_accepts_a_sandbox(tmp_path, monkey
 
     assert {entry["name"] for entry in entries} == {"built", "user"}
     assert {entry["tier"] for entry in entries} == {"builtin", "user"}
+
+
+REFUSED_MATCHERS = (
+    '[[hook]]\nname = "broken"\nevents = ["after_tool"]\n'
+    'source = "/x"\nmatchers = ["Write", 42]\n'
+)
+
+
+def test_one_walk_returns_the_entries_and_the_refusals_with_their_tiers(
+    tmp_path, monkeypatch
+):
+    """`resolve` walked the tiers and `skipped_manifests` walked them again to
+    ask why hooks were missing, so every refusal was said twice on stderr and
+    neither copy said which tier it came from (T2337, review d0cf8532).
+    """
+    builtin = tmp_path / "builtin"
+    library = tmp_path / "library" / "hooks.d"
+    user = tmp_path / "user"
+    _write(builtin, "built", "built.sh")
+    _write(library, "good", "good.sh")
+    _write(user, "ours", "ours.sh")
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "broken.toml").write_text(REFUSED_MATCHERS, encoding="utf-8")
+    monkeypatch.setattr(registry, "BUILTIN_DIR", builtin)
+
+    walked = []
+    load_dir = registry._load_dir
+
+    def counting(directory, tier):
+        walked.append((directory, tier))
+        return load_dir(directory, tier)
+
+    monkeypatch.setattr(registry, "_load_dir", counting)
+    result = registry.load_tiers(library=library.parent, hooks_d=user)
+
+    assert walked == [(builtin, "builtin"), (library, "library"), (user, "user")]
+    assert {entry["name"] for entry in result.entries} == {"built", "good", "ours"}
+    assert [(r.tier, r.path.name) for r in result.refused] == [("library", "broken.toml")]
+    assert "matchers" in result.refused[0].detail
+
+
+def test_the_builtin_tier_is_walked_too(tmp_path, monkeypatch):
+    """Neither of the two walkers passed over the tier that ships with the
+    package, so a builtin manifest that stopped loading was the one refusal no
+    report could see, on the machine that had it."""
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    (builtin / "rotten.toml").write_text('[[hook]]\nname = 7\n', encoding="utf-8")
+    monkeypatch.setattr(registry, "BUILTIN_DIR", builtin)
+
+    result = registry.load_tiers(library=tmp_path / "no-library",
+                                 hooks_d=tmp_path / "no-user")
+
+    assert [(r.tier, r.path.name) for r in result.refused] == [("builtin", "rotten.toml")]
+
+
+@pytest.mark.parametrize("body", [
+    pytest.param('[hook]\nname = "single"\nevents = ["after_tool"]\nsource = "/x"\n',
+                 id="hook-is-one-table"),
+    pytest.param('hook = "just-a-string"\n', id="hook-is-a-string"),
+    pytest.param('hook = ["name", "events"]\n', id="hook-array-of-strings"),
+])
+def test_a_hook_section_that_is_not_an_array_of_tables_is_reported_not_raised(
+    tmp_path, monkeypatch, body
+):
+    """`[hook]` iterates as its keys and a bare string as its characters, so
+    both reached `_validate` as a string and raised AttributeError out of the
+    loader: one mistyped manifest cost the operator the whole report."""
+    user = tmp_path / "user"
+    _write(user, "fine", "fine.sh")
+    (user / "mistyped.toml").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(registry, "BUILTIN_DIR", tmp_path / "no-builtin")
+
+    result = registry.load_tiers(library=tmp_path / "no-library", hooks_d=user)
+
+    assert [(r.tier, r.path.name) for r in result.refused] == [("user", "mistyped.toml")]
+    assert {entry["name"] for entry in result.entries} == {"fine"}
+
+
+def test_a_refused_entry_is_said_once_for_the_file_it_is_in(tmp_path, monkeypatch):
+    """Two bad stanzas in one manifest are one manifest. The report, the
+    remedy and the exit code all speak per file, so two refusals of one file
+    read as two files (review e097e80b, T2337).
+    """
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "two.toml").write_text(
+        '[[hook]]\nname = "one"\nevents = ["after_tool"]\nsource = "/one"\n'
+        'matchers = [42]\n'
+        '[[hook]]\nname = "two"\nevents = ["not_an_event"]\nsource = "/two"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(registry, "BUILTIN_DIR", tmp_path / "no-builtin")
+
+    result = registry.load_tiers(library=tmp_path / "no-library", hooks_d=user)
+
+    assert [(r.tier, r.path.name) for r in result.refused] == [("user", "two.toml")]
+    assert result.refused[0].loaded == ()
+    detail = result.refused[0].detail
+    assert "2 of 2" in detail and "one" in detail and "two" in detail
+
+
+def test_a_bad_entry_refuses_itself_and_not_its_siblings(tmp_path, monkeypatch):
+    """The file still runs its good hook, so the refusal has to record that --
+    and a `hook` entry that is not a table costs that entry alone, not the
+    valid table beside it.
+    """
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "mixed.toml").write_text(
+        '[[hook]]\nname = "live"\nevents = ["after_tool"]\nsource = "/live"\n'
+        '[[hook]]\nname = "bad"\nevents = ["after_tool"]\nsource = "/bad"\n'
+        'matchers = [42]\n',
+        encoding="utf-8",
+    )
+    (user / "inline.toml").write_text(
+        'hook = [{ name = "sibling", events = ["after_tool"], source = "/s" },'
+        ' "not-a-table"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(registry, "BUILTIN_DIR", tmp_path / "no-builtin")
+
+    result = registry.load_tiers(library=tmp_path / "no-library", hooks_d=user)
+
+    by_file = {r.path.name: r for r in result.refused}
+    assert sorted(by_file) == ["inline.toml", "mixed.toml"]
+    assert {entry["name"] for entry in result.entries} == {"live", "sibling"}
+    assert by_file["mixed.toml"].loaded == ("live",)
+    assert "bad" in by_file["mixed.toml"].detail
+    assert by_file["inline.toml"].loaded == ("sibling",)
+    assert "not a table" in by_file["inline.toml"].detail
 
 
 def test_host_resolution_uses_the_host_data_root_for_library_manifests(tmp_path, monkeypatch):

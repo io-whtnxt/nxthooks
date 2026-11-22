@@ -19,6 +19,26 @@
   byte-identity half of the same contract. `bins` must now equal the
   `[project.scripts]` keys, so a new console script cannot miss the bundle.
 
+- **`verify` reports a refused manifest once, from one walk, with a remedy
+  (T2337).** The report walked `hooks.d` a second time to ask what had been
+  dropped, so every refusal reached stderr twice and neither copy said which
+  tier it came from; the builtin tier, walked by neither pass, could rot
+  unreported; and a manifest whose `hook` section was a table (`[hook]`) or a
+  bare string raised `AttributeError` out of the loader instead of appearing
+  in the report. One pass over the three tiers now returns the entries, the
+  collisions and the refusals together, each refusal carrying its tier and its
+  file, and `[hook]`-shaped mistakes are reported. `verify` and `doctor` fail
+  on a refusal in any tier; `install` answers only for the user `hooks.d` it
+  seeds, and says a library or builtin refusal — a file it never writes — as a
+  `warn` with the file to fix, counted in the summary, so an install that
+  worked no longer exits 1 over somebody else's manifest. A refusal is now one
+  report line per file, listing every entry it refused; a file that still
+  loads a hook is told to fix those entries instead of deleting a guard that
+  is running; an entry that is not a table costs only itself; and the
+  `GAPS FOUND` summary names the refused manifests by path rather than
+  ordering `install` at a file `install` never overwrites (review e097e80b,
+  `README.md` Lifecycle).
+
 ## 0.2.2
 
 - **Uninstall takes back the plugin's agent documents.** NxtOS's delivery
