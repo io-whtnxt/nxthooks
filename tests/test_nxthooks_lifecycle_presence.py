@@ -457,12 +457,10 @@ def test_a_refused_manifest_is_said_once_and_names_the_file_to_fix(
     assert f"fix or delete {broken}" in captured.out
 
 
-def test_a_manifest_refused_in_another_tier_is_reported_without_failing_the_run(
-    hooks_machine, capsys
-):
-    """`install` ends by running `verify`, so a fatal refusal in a `hooks.d`
-    this component does not own made a good install exit 1 and send the
-    operator to a command that cannot write the file it names.
+def test_a_refusal_in_another_tier_is_a_gap_in_verify(hooks_machine, capsys):
+    """A library manifest that will not load is a guard that runs nowhere, and
+    `verify`/`doctor` are the verbs that answer for that: only `install`
+    declines to fail over a tier it never writes (T2337, review d0cf8532).
     """
     host = hooks_machine("claude-code")
     assert lifecycle.cmd_install(_args(), host) == 0
@@ -471,13 +469,12 @@ def test_a_manifest_refused_in_another_tier_is_reported_without_failing_the_run(
     (theirs / "theirs.toml").write_text(_refusing_manifest("theirs"))
     capsys.readouterr()
 
-    assert lifecycle.cmd_verify(_args(), host) == 0
+    assert lifecycle.cmd_verify(_args(), host) == 1
     out = capsys.readouterr().out
 
-    assert "[warn] manifest refused" in out
+    assert "[GAP ] manifest refused  [library]" in out
     assert f"fix or delete {theirs / 'theirs.toml'}" in out
-    assert "GAPS FOUND" not in out
-    assert "1 manifest refused outside this install's tier" in out
+    assert "GAPS FOUND" in out
 
 
 def test_install_succeeds_though_another_components_manifest_is_broken(
@@ -485,7 +482,8 @@ def test_install_succeeds_though_another_components_manifest_is_broken(
 ):
     """The loop this closes: a broken manifest in someone else's `hooks.d` made
     `install` exit 1, its own final `verify` said so, and the advice was to run
-    `install` -- the one verb that cannot write the file it names.
+    `install` -- the one verb that cannot write the file it names. The refusal
+    is still said, with its remedy, and counted in the summary.
     """
     host = hooks_machine("claude-code")
     theirs = host.library_root / "hooks.d"
@@ -495,5 +493,25 @@ def test_install_succeeds_though_another_components_manifest_is_broken(
     assert lifecycle.cmd_install(_args(), host) == 0
     out = capsys.readouterr().out
 
-    assert "[warn] manifest refused" in out
+    assert "[warn] manifest refused  [library]" in out
     assert "GAPS FOUND" not in out
+    assert "1 manifest refused outside this install's tier" in out
+
+
+def test_a_refusal_in_the_seeded_tier_fails_install_and_verify(
+    hooks_machine, capsys
+):
+    """The other half of the policy: `hooks.d` is the directory `install`
+    seeds, so a manifest it cannot load is this component's own gap and no
+    amount of `warn` softens it.
+    """
+    host = hooks_machine("claude-code")
+    host.hooks_d.mkdir(parents=True)
+    (host.hooks_d / "stray.toml").write_text(_refusing_manifest("stray"))
+
+    assert lifecycle.cmd_install(_args(), host) == 1
+    out = capsys.readouterr().out
+
+    assert "[GAP ] manifest refused  [user]" in out
+    assert "GAPS FOUND" in out
+    assert lifecycle.cmd_verify(_args(), host) == 1

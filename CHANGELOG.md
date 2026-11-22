@@ -27,11 +27,12 @@
   bare string raised `AttributeError` out of the loader instead of appearing
   in the report. One pass over the three tiers now returns the entries, the
   collisions and the refusals together, each refusal carrying its tier and its
-  file. The exit code is explicit about ownership: a refusal in the user
-  `hooks.d` that `install` seeds is a gap, and a refusal in the library or
-  builtin tier — a file `nxthooks install` never writes — is reported with the
-  file to fix and counted in the summary without failing an install that
-  worked (`README.md`, Lifecycle).
+  file, and `[hook]`-shaped mistakes are reported. `verify` and `doctor` fail
+  on a refusal in any tier; `install` answers only for the user `hooks.d` it
+  seeds, and says a library or builtin refusal — a file it never writes — as a
+  `warn` with the file to fix, counted in the summary, so an install that
+  worked no longer exits 1 over somebody else's manifest (`README.md`,
+  Lifecycle).
 
 ## 0.2.2
 

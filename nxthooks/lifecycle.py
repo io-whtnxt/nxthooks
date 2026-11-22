@@ -1371,7 +1371,11 @@ def cmd_install(args, host: Host | None = None) -> int:
           else f"pane installed      {written}")
 
     print("\nverify:")
-    return cmd_verify(args, host)
+    # Only the tier `install` seeds counts against it: it seeds manifests that
+    # are missing and writes nothing in the library or builtin tier, so a
+    # refusal there is named with its remedy but is not this verb's failure.
+    # `verify` and `doctor` keep the default and fail on any refusal.
+    return cmd_verify(args, host, fatal_refusal_tiers=frozenset({"user"}))
 
 
 def _remove_owned_paths(host: Host) -> list[str]:
@@ -1670,7 +1674,13 @@ def _refused_remedy(refused: Refused) -> str:
             "replace it")
 
 
-def cmd_verify(args, host: Host | None = None) -> int:
+def cmd_verify(args, host: Host | None = None, *,
+               fatal_refusal_tiers: frozenset = frozenset(
+                   {"builtin", "library", "user"})) -> int:
+    """`fatal_refusal_tiers` is the exit-code policy for a manifest the
+    registry refused, and only `install` narrows it -- see the comment where
+    the refusals are reported.
+    """
     host = host or Host.local()
     cfg = host.config()
     root = host.root(cfg)
@@ -1690,18 +1700,17 @@ def cmd_verify(args, host: Host | None = None) -> int:
     # A manifest refused at load runs nowhere and drops out of every wiring
     # check below, so the report has to name it (T2290, review 856094e0).
     #
-    # Exit-code policy (T2337, review d0cf8532): a refusal is a GAP only for
-    # the tier this component installs into, the user `hooks.d` that `install`
-    # seeds. A refusal in the library or builtin tier names a file this command
-    # has no write access to and `install` never rewrites, so failing the run
-    # sent `install` -- which ends by running this report -- out exit 1 over
-    # somebody else's manifest, with advice that could not be followed. Those
-    # refusals are said with the same remedy line, counted in the summary, and
-    # cost nothing but the note.
+    # Exit-code policy (T2337, review d0cf8532): a refused manifest is a guard
+    # that runs nowhere, so `verify` and `doctor` fail on one wherever it lives,
+    # in any tier. `install` passes the user tier alone, because a refusal in
+    # the library or builtin tier names a file `install` never writes and never
+    # overwrites: failing there sent it out exit 1 over somebody else's
+    # manifest, advising the one command that could not fix it. Such a refusal
+    # is still said, with the same remedy line, and counted in the summary.
     elsewhere = 0
     for refused in resolution.refused:
         reason = f"[{refused.tier}] {refused.detail}"
-        if refused.tier == "user":
+        if refused.tier in fatal_refusal_tiers:
             ok &= _check("manifest refused", False, reason)
         else:
             print(f"  [warn] manifest refused  {reason}")
