@@ -82,7 +82,7 @@ from .delivery import deliver, withdraw
 from .contract import version_key
 from .config import load_config, resolve_root, user_config_path
 from .manifest import harness_enabled, load_manifests
-from .registry import builtin_manifests, render_collisions
+from .registry import Refused, builtin_manifests, load_tiers, render_collisions
 from .platform import COMPONENT, cache_dir, config_dir, data_dir, state_dir
 
 #: What NxtHooks 0.1 wrote instead of a marker. Recognised on unwire through
@@ -1651,6 +1651,25 @@ def _report_projections(host: Host) -> bool:
     return report.exit_code == 0
 
 
+def _refused_remedy(refused: Refused) -> str:
+    """The line after a refusal, naming the file to open and who can write it.
+
+    `install` used to be the only advice, and it is the wrong verb for a file
+    `install` never overwrites: it seeds manifests that are missing and leaves
+    every manifest that exists alone. A remedy that cannot work trains its
+    reader to stop reading the report, which is why a provided source is
+    reported `[pend]` rather than as a gap (see `_check_source`).
+    """
+    if refused.tier == "user":
+        return (f"fix or delete {refused.path}, or no hook it declares runs; "
+                "`install` will not overwrite it")
+    if refused.tier == "library":
+        return (f"fix or delete {refused.path} -- the library tier belongs to "
+                "whichever component installed it")
+    return (f"{refused.path} ships inside this package; reinstall NxtHooks to "
+            "replace it")
+
+
 def cmd_verify(args, host: Host | None = None) -> int:
     host = host or Host.local()
     cfg = host.config()
@@ -1662,17 +1681,32 @@ def cmd_verify(args, host: Host | None = None) -> int:
                  str(root))
     ok &= _check("cc transport", (root / "bin" / "cc-dispatch.sh").is_file())
 
-    from .registry import resolve, skipped_manifests
-
-    entries, collisions = resolve(
+    resolution = load_tiers(
         hooks_d=host.hooks_d,
         library=host.library_root,
     )
+    entries, collisions = list(resolution.entries), resolution.collisions
     ok &= _check("manifest directory", host.hooks_d.is_dir(), f"{len(entries)} hook(s)")
     # A manifest refused at load runs nowhere and drops out of every wiring
     # check below, so the report has to name it (T2290, review 856094e0).
-    for reason in skipped_manifests(library=host.library_root, hooks_d=host.hooks_d):
-        ok &= _check("manifest refused", False, reason)
+    #
+    # Exit-code policy (T2337, review d0cf8532): a refusal is a GAP only for
+    # the tier this component installs into, the user `hooks.d` that `install`
+    # seeds. A refusal in the library or builtin tier names a file this command
+    # has no write access to and `install` never rewrites, so failing the run
+    # sent `install` -- which ends by running this report -- out exit 1 over
+    # somebody else's manifest, with advice that could not be followed. Those
+    # refusals are said with the same remedy line, counted in the summary, and
+    # cost nothing but the note.
+    elsewhere = 0
+    for refused in resolution.refused:
+        reason = f"[{refused.tier}] {refused.detail}"
+        if refused.tier == "user":
+            ok &= _check("manifest refused", False, reason)
+        else:
+            print(f"  [warn] manifest refused  {reason}")
+            elsewhere += 1
+        print(f"         {_refused_remedy(refused)}")
     pending = [e for e in entries if _source_state(e, host) == "pending"]
     for entry in entries:
         ok &= _check_source(entry, host)
@@ -1764,6 +1798,8 @@ def cmd_verify(args, host: Host | None = None) -> int:
         notes.append(f"{len(collisions)} user hook(s) shadowed")
     if runtime_failures:
         notes.append(f"{len(runtime_failures)} hook(s) failing at runtime")
+    if elsewhere:
+        notes.append(f"{elsewhere} manifest refused outside this install's tier")
     detail = f" ({', '.join(notes)})" if notes else ""
     print(f"\nresult: all wiring resolves{detail}.")
     return 0

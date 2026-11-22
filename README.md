@@ -197,6 +197,20 @@ needs in order to remove prior stanzas without matching another tool's
 generic marker. An older `~/.config/nxt/hooks/installed-roots` is still read;
 nothing writes one.
 
+**A refused manifest names its file.** A manifest the registry will not load
+— unreadable TOML, `[hook]` where `[[hook]]` belongs, a hook whose `matchers`
+are not tool-name strings — runs nowhere, so `verify` reports it beside the
+wiring, with the tier it came from and the file to fix; the builtin, library
+and user tiers are all covered. `install` seeds manifests that are missing and
+never overwrites one that exists, so it is not the remedy for a broken one and
+the report says so. The exit code follows ownership: a refusal in the user
+`hooks.d` that `install` seeds is a gap, while a refusal in the library or
+builtin tier — files this component does not write — is reported with its
+remedy and named in the summary without failing the run, the way a missing
+source another component provides reports `pending`. One pass over the three
+tiers produces the hooks, the collisions and the refusals together, so no
+refusal is reported twice.
+
 **Uninstall is complete.** Every ledger slot is unwired, every owned
 directory and marker file removed, the runtime root deleted, the config kept
 unless `--purge-config`, and every directory `install` had to create removed

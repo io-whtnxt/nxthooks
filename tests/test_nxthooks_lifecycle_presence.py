@@ -415,16 +415,85 @@ def test_the_installed_transport_is_fail_quiet(hooks_machine, name):
     assert "{{STATE}}" not in text
 
 
+def _refusing_manifest(name: str) -> str:
+    """A manifest `_validate` refuses: `matchers` are tool-name strings."""
+    return (f'[[hook]]\nname = "{name}"\nevents = ["before_tool"]\n'
+            'source = "/x.py"\nmatchers = ["Write", 42]\n')
+
+
 def test_a_manifest_refused_at_load_is_a_gap_in_verify(hooks_machine, capsys):
     # T2290, review 856094e0: a refused manifest drops its hook from every
     # wiring check, so without this line verify read healthy with a guard off.
     host = hooks_machine("claude-code")
     assert lifecycle.cmd_install(_args(), host) == 0
     host.hooks_d.mkdir(parents=True, exist_ok=True)
-    (host.hooks_d / "stray.toml").write_text(
-        '[[hook]]\nname = "stray"\nevents = ["before_tool"]\nsource = "/x.py"\nmatchers = ["Write", 42]\n')
+    (host.hooks_d / "stray.toml").write_text(_refusing_manifest("stray"))
     capsys.readouterr()
 
     assert lifecycle.cmd_verify(_args(), host) == 1
     out = capsys.readouterr().out
     assert "[GAP ] manifest refused" in out and "matchers" in out
+
+
+def test_a_refused_manifest_is_said_once_and_names_the_file_to_fix(
+    hooks_machine, capsys
+):
+    """The report told the operator a manifest was refused and to `run install
+    to repair`, which is the wrong verb for a manifest `install` never
+    overwrites, and the refusal reached stderr twice because two walks each
+    said it (T2337, review d0cf8532).
+    """
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    host.hooks_d.mkdir(parents=True, exist_ok=True)
+    broken = host.hooks_d / "stray.toml"
+    broken.write_text(_refusing_manifest("stray"))
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 1
+    captured = capsys.readouterr()
+
+    assert captured.out.count("[GAP ] manifest refused") == 1
+    assert f"fix or delete {broken}" in captured.out
+
+
+def test_a_manifest_refused_in_another_tier_is_reported_without_failing_the_run(
+    hooks_machine, capsys
+):
+    """`install` ends by running `verify`, so a fatal refusal in a `hooks.d`
+    this component does not own made a good install exit 1 and send the
+    operator to a command that cannot write the file it names.
+    """
+    host = hooks_machine("claude-code")
+    assert lifecycle.cmd_install(_args(), host) == 0
+    theirs = host.library_root / "hooks.d"
+    theirs.mkdir(parents=True, exist_ok=True)
+    (theirs / "theirs.toml").write_text(_refusing_manifest("theirs"))
+    capsys.readouterr()
+
+    assert lifecycle.cmd_verify(_args(), host) == 0
+    out = capsys.readouterr().out
+
+    assert "[warn] manifest refused" in out
+    assert f"fix or delete {theirs / 'theirs.toml'}" in out
+    assert "GAPS FOUND" not in out
+    assert "1 manifest refused outside this install's tier" in out
+
+
+def test_install_succeeds_though_another_components_manifest_is_broken(
+    hooks_machine, capsys
+):
+    """The loop this closes: a broken manifest in someone else's `hooks.d` made
+    `install` exit 1, its own final `verify` said so, and the advice was to run
+    `install` -- the one verb that cannot write the file it names.
+    """
+    host = hooks_machine("claude-code")
+    theirs = host.library_root / "hooks.d"
+    theirs.mkdir(parents=True)
+    (theirs / "theirs.toml").write_text(_refusing_manifest("theirs"))
+
+    assert lifecycle.cmd_install(_args(), host) == 0
+    out = capsys.readouterr().out
+
+    assert "[warn] manifest refused" in out
+    assert "GAPS FOUND" not in out

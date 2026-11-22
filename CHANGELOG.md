@@ -19,6 +19,20 @@
   byte-identity half of the same contract. `bins` must now equal the
   `[project.scripts]` keys, so a new console script cannot miss the bundle.
 
+- **`verify` reports a refused manifest once, from one walk, with a remedy
+  (T2337).** The report walked `hooks.d` a second time to ask what had been
+  dropped, so every refusal reached stderr twice and neither copy said which
+  tier it came from; the builtin tier, walked by neither pass, could rot
+  unreported; and a manifest whose `hook` section was a table (`[hook]`) or a
+  bare string raised `AttributeError` out of the loader instead of appearing
+  in the report. One pass over the three tiers now returns the entries, the
+  collisions and the refusals together, each refusal carrying its tier and its
+  file. The exit code is explicit about ownership: a refusal in the user
+  `hooks.d` that `install` seeds is a gap, and a refusal in the library or
+  builtin tier — a file `nxthooks install` never writes — is reported with the
+  file to fix and counted in the summary without failing an install that
+  worked (`README.md`, Lifecycle).
+
 ## 0.2.2
 
 - **Uninstall takes back the plugin's agent documents.** NxtOS's delivery
