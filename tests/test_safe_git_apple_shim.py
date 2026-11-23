@@ -191,6 +191,23 @@ def test_alias_to_the_shim_counts_as_the_shim(tmp_path, rig, darwin, monkeypatch
     assert shim._find_git({"PATH": str(alias_dir)}) == os.path.realpath(str(rig["shim"]))
 
 
+def test_lexical_shim_constant_matches_both_checks(tmp_path, rig, darwin, monkeypatch):
+    lexical = tmp_path / "lexical-shim"
+    lexical.symlink_to(rig["shim"])
+    monkeypatch.setattr(shim, "_SYSTEM_GIT_SHIM", str(lexical))
+    dev = tmp_path / "dev"
+    (dev / "usr" / "bin").mkdir(parents=True)
+    (dev / "usr" / "bin" / "git").symlink_to(rig["shim"])
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(_write(
+        tmp_path / "select.sh", f"#!/bin/sh\necho '{dev}'\n")))
+    assert shim._toolchain_present() is False
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: False)
+    _never_spawn(monkeypatch)
+    assert shim._find_git({"PATH": str(rig["shim"].parent)}) is None
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: True)
+    assert shim._find_git({"PATH": str(rig["shim"].parent)}) == os.path.realpath(str(rig["shim"]))
+
+
 def test_symlinked_ancestor_still_classifies_the_shim(tmp_path, rig, darwin, monkeypatch):
     linkroot = tmp_path / "linkroot"
     linkroot.symlink_to(tmp_path, target_is_directory=True)

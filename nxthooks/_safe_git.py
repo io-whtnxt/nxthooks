@@ -314,8 +314,9 @@ def _toolchain_present() -> bool:
     if not (os.path.isfile(git) and os.access(git, os.X_OK)):
         return False
     # The developer dir itself may be `/`, or its git an alias of the shim:
-    # either way the canonical answer is the shim, not a toolchain.
-    return os.path.realpath(git) != _SYSTEM_GIT_SHIM
+    # either way the canonical answer is the shim, not a toolchain. Both
+    # sides canonical: the constant itself may be a lexical alias.
+    return os.path.realpath(git) != os.path.realpath(_SYSTEM_GIT_SHIM)
 
 
 def _find_git(env: dict[str, str]) -> "str | None":
@@ -332,6 +333,7 @@ def _find_git(env: dict[str, str]) -> "str | None":
     # path both classifies the shim and is what gets launched, aliases
     # included.
     toolchain = None
+    canonical_shim = os.path.realpath(_SYSTEM_GIT_SHIM)
     for directory in env["PATH"].split(os.pathsep):
         if not os.path.isabs(directory):
             continue
@@ -339,7 +341,7 @@ def _find_git(env: dict[str, str]) -> "str | None":
         if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
             continue
         resolved = os.path.realpath(candidate)
-        if resolved == _SYSTEM_GIT_SHIM:
+        if resolved == canonical_shim:
             if toolchain is None:
                 toolchain = _toolchain_present()
             if not toolchain:
