@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
 
@@ -102,11 +101,35 @@ def test_toolchain_probe_fails_closed_on_errors(tmp_path, darwin, monkeypatch):
     assert shim._toolchain_present() is False
 
 
-def test_toolchain_probe_fails_closed_on_timeout(tmp_path, darwin, monkeypatch):
-    def slow(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=shim._TOOLCHAIN_TIMEOUT)
-    monkeypatch.setattr(shim.subprocess, "run", slow)
+def test_toolchain_probe_honors_budget_without_spawning(tmp_path, darwin, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("a cancelled probe must not spawn")
+    monkeypatch.setattr(shim.subprocess, "Popen", refuse)
+    with shim.commit_preparation_budget(float("-inf"), lambda: True):
+        assert shim._toolchain_present() is False
+
+
+def test_toolchain_probe_fails_closed_on_overflow(tmp_path, darwin, monkeypatch):
+    noisy = _write(tmp_path / "noisy-select.sh", "#!/bin/sh\nhead -c 8192 /dev/zero\n")
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(noisy))
     assert shim._toolchain_present() is False
+
+
+def test_multiple_aliases_probe_the_toolchain_once(tmp_path, rig, darwin, monkeypatch):
+    calls = []
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: (calls.append(1), False)[1])
+    first, second = tmp_path / "first", tmp_path / "second"
+    for slot in (first, second):
+        slot.mkdir()
+        (slot / "git").symlink_to(rig["shim"])
+    path = f"{first}{os.pathsep}{second}"
+    assert shim._find_git({"PATH": path}) is None
+    assert calls == [1]
+
+
+def test_padded_path_entries_still_resolve(tmp_path, rig, darwin):
+    path = f"  {rig['stand'].parent}  "
+    assert shim._find_git({"PATH": path}) == str(rig["stand"])
 
 
 def test_toolchain_answer_must_name_a_usable_developer_dir(tmp_path, darwin, monkeypatch):
@@ -132,10 +155,12 @@ def test_empty_path_with_cwd_git_is_missing_and_never_runs(tmp_path, darwin, mon
     assert run_git(["status"], str(tmp_path), timeout=5).outcome == "missing"
 
 
-def test_alias_to_the_shim_counts_as_the_shim(tmp_path, rig, darwin):
+def test_alias_to_the_shim_counts_as_the_shim(tmp_path, rig, darwin, monkeypatch):
     alias_dir = tmp_path / "aliasdir"
     alias_dir.mkdir()
-    alias = alias_dir / "git"
-    alias.symlink_to(rig["shim"])
-    assert shim._is_system_shim(str(alias)) is True
-    assert shim._is_system_shim(str(rig["stand"])) is False
+    (alias_dir / "git").symlink_to(rig["shim"])
+    darwin.setenv("PATH", str(alias_dir))
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: False)
+    assert shim._find_git({"PATH": str(alias_dir)}) is None
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: True)
+    assert shim._find_git({"PATH": str(alias_dir)}) == str(rig["shim"])

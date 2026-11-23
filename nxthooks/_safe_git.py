@@ -292,32 +292,21 @@ _XCODE_SELECT = "/usr/bin/xcode-select"
 _TOOLCHAIN_TIMEOUT = 2.0
 
 
-def _is_system_shim(candidate: str) -> bool:
-    """Whether `candidate` is the real system shim (or an alias of it)."""
-    return os.path.realpath(candidate) == _SYSTEM_GIT_SHIM
-
-
 def _toolchain_present() -> bool:
-    """Whether macOS answers a usable toolchain. `xcode-select -p` must exit
-    0 naming a nonempty absolute developer dir holding a real `usr/bin/git`;
-    anything else -- missing binary, failure, timeout, an unusable answer --
-    is fail-closed, so the shim is never run on a guess. No shell, no stdio
+    """Whether macOS answers a usable toolchain. `xcode-select -p` runs
+    through `_spawn`, so commit-preparation cancellation and budgets apply;
+    it must exit 0 naming a nonempty absolute developer dir holding a real
+    `usr/bin/git`. A timeout, overflow, OS failure or unusable answer is
+    fail-closed, so the shim is never run on a guess. No shell, no stdio
     interaction, bounded."""
     try:
-        completed = subprocess.run(
-            [_XCODE_SELECT, "-p"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=_TOOLCHAIN_TIMEOUT,
-            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
-            shell=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        done = _spawn([_XCODE_SELECT, "-p"], "/", {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                      b"", _TOOLCHAIN_TIMEOUT, 4096)
+    except OSError:
         return False
-    if completed.returncode != 0:
+    if done.timed_out or done.overflow or done.code != 0:
         return False
-    lines = completed.stdout.decode("utf-8", errors="replace").splitlines()
+    lines = done.stdout.decode("utf-8", errors="replace").splitlines()
     root = lines[0].strip() if lines else ""
     if not root or not os.path.isabs(root):
         return False
@@ -330,19 +319,28 @@ def _find_git(env: dict[str, str]) -> "str | None":
         return shutil.which("git", path=env["PATH"])
     # In PATH order, skipping an unusable system shim so a standalone git
     # later in the same PATH still wins -- and so a shim-only PATH reads as
-    # missing instead of summoning the install dialog. Deliberately uncached:
-    # a negative answer must not survive a hot CLT install. Every candidate
-    # must be absolute: an empty PATH entry would otherwise join to a bare
-    # `git` and probe the working directory, where `which` answers None.
+    # missing instead of summoning the install dialog. The toolchain probe
+    # runs at most once per lookup, on the first shim seen, and never
+    # outlives it: a negative answer must not survive a hot CLT install.
+    # Every entry must be absolute after trimming (an empty entry would join
+    # to a bare `git` and probe the working directory, where `which` answers
+    # None). Each candidate is resolved once and the canonical path both
+    # classifies the shim and is what gets launched, aliases included.
+    toolchain = None
     for directory in env["PATH"].split(os.pathsep):
+        directory = directory.strip()
         if not os.path.isabs(directory):
             continue
         candidate = os.path.join(directory, "git")
         if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
             continue
-        if _is_system_shim(candidate) and not _toolchain_present():
-            continue
-        return candidate
+        resolved = os.path.realpath(candidate)
+        if resolved == _SYSTEM_GIT_SHIM:
+            if toolchain is None:
+                toolchain = _toolchain_present()
+            if not toolchain:
+                continue
+        return resolved
     return None
 
 
