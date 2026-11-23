@@ -14,8 +14,6 @@ from pathlib import Path
 
 import pytest
 
-import pytest
-
 from nxthooks import _safe_git as shim
 from nxthooks._safe_git import _Outcome, run_git
 
@@ -165,7 +163,7 @@ def test_toolchain_git_aliasing_the_shim_is_not_usable(tmp_path, rig, darwin, mo
     assert shim._toolchain_present() is False
 
 
-def test_toolchain_answer_slash_is_not_usable(tmp_path, rig, darwin, monkeypatch):
+def test_toolchain_answer_slash_is_not_usable(tmp_path, darwin, monkeypatch):
     if not os.path.isfile("/usr/bin/git"):
         pytest.skip("no Apple shim on this host")
     monkeypatch.setattr(shim, "_SYSTEM_GIT_SHIM", os.path.realpath("/usr/bin/git"))
