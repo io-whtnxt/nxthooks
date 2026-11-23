@@ -311,7 +311,11 @@ def _toolchain_present() -> bool:
     if not root or not os.path.isabs(root):
         return False
     git = os.path.join(root, "usr", "bin", "git")
-    return os.path.isfile(git) and os.access(git, os.X_OK)
+    if not (os.path.isfile(git) and os.access(git, os.X_OK)):
+        return False
+    # The developer dir itself may be `/`, or its git an alias of the shim:
+    # either way the canonical answer is the shim, not a toolchain.
+    return os.path.realpath(git) != _SYSTEM_GIT_SHIM
 
 
 def _find_git(env: dict[str, str]) -> "str | None":
