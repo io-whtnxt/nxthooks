@@ -41,6 +41,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 from typing import Callable, NamedTuple
 
@@ -281,8 +282,56 @@ def _spawn(argv: list[str], cwd: str, env: dict[str, str], stdin: bytes,
                     timed_out, overflow.is_set())
 
 
+#: The Apple command-line-tools shim. Executing it with no toolchain installed
+#: summons the install dialog, so it is never executed on that guess: it only
+#: counts when a toolchain answers. Compared after `realpath`, so an alias
+#: pointing at the shim counts as the shim.
+_SYSTEM_GIT_SHIM = "/usr/bin/git"
+#: The oracle for a usable toolchain, by absolute path, never through the shell.
+_XCODE_SELECT = "/usr/bin/xcode-select"
+_TOOLCHAIN_TIMEOUT = 10.0
+
+
+def _is_system_shim(candidate: str) -> bool:
+    """Whether `candidate` is the real system shim (or an alias of it)."""
+    return os.path.realpath(candidate) == _SYSTEM_GIT_SHIM
+
+
+def _toolchain_present() -> bool:
+    """Whether macOS answers a toolchain path. `xcode-select -p` prints one
+    and exits 0 when CLT or Xcode is installed; anything else -- missing
+    binary, failure, timeout -- is fail-closed, so the shim is never run on
+    a guess. No shell, no stdio interaction, bounded."""
+    try:
+        completed = subprocess.run(
+            [_XCODE_SELECT, "-p"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_TOOLCHAIN_TIMEOUT,
+            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 def _find_git(env: dict[str, str]) -> "str | None":
-    return shutil.which("git", path=env["PATH"])
+    if sys.platform != "darwin":
+        return shutil.which("git", path=env["PATH"])
+    # In PATH order, skipping an unusable system shim so a standalone git
+    # later in the same PATH still wins -- and so a shim-only PATH reads as
+    # missing instead of summoning the install dialog. Deliberately uncached:
+    # a negative answer must not survive a hot CLT install.
+    for directory in env["PATH"].split(os.pathsep):
+        candidate = os.path.join(directory, "git")
+        if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
+            continue
+        if _is_system_shim(candidate) and not _toolchain_present():
+            continue
+        return candidate
+    return None
 
 
 # Global options git reads before the subcommand. Anything else is refused
