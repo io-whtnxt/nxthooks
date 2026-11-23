@@ -306,8 +306,8 @@ def _toolchain_present() -> bool:
         return False
     if done.timed_out or done.overflow or done.code != 0:
         return False
-    lines = done.stdout.decode("utf-8", errors="replace").splitlines()
-    root = lines[0].strip() if lines else ""
+    lines = os.fsdecode(done.stdout).splitlines()
+    root = lines[0] if lines else ""
     if not root or not os.path.isabs(root):
         return False
     git = os.path.join(root, "usr", "bin", "git")
@@ -322,13 +322,13 @@ def _find_git(env: dict[str, str]) -> "str | None":
     # missing instead of summoning the install dialog. The toolchain probe
     # runs at most once per lookup, on the first shim seen, and never
     # outlives it: a negative answer must not survive a hot CLT install.
-    # Every entry must be absolute after trimming (an empty entry would join
-    # to a bare `git` and probe the working directory, where `which` answers
-    # None). Each candidate is resolved once and the canonical path both
-    # classifies the shim and is what gets launched, aliases included.
+    # Every entry must be absolute and is taken literally: an empty entry
+    # would join to a bare `git` and probe the working directory, where
+    # `which` answers None. Each candidate is resolved once and the canonical
+    # path both classifies the shim and is what gets launched, aliases
+    # included.
     toolchain = None
     for directory in env["PATH"].split(os.pathsep):
-        directory = directory.strip()
         if not os.path.isabs(directory):
             continue
         candidate = os.path.join(directory, "git")

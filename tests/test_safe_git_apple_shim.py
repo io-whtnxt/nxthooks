@@ -127,9 +127,15 @@ def test_multiple_aliases_probe_the_toolchain_once(tmp_path, rig, darwin, monkey
     assert calls == [1]
 
 
-def test_padded_path_entries_still_resolve(tmp_path, rig, darwin):
-    path = f"  {rig['stand'].parent}  "
-    assert shim._find_git({"PATH": path}) == str(rig["stand"])
+def test_path_entry_with_trailing_space_is_literal(tmp_path, rig, darwin):
+    spaced = tmp_path / "with space "
+    spaced.mkdir()
+    wanted = _write(spaced / "git", "#!/bin/sh\nexit 0\n")
+    neighbor = tmp_path / "with space"
+    neighbor.mkdir()
+    _write(neighbor / "git", "#!/bin/sh\nexit 3\n")
+    path = f"{spaced}{os.pathsep}{neighbor}"
+    assert shim._find_git({"PATH": path}) == os.path.realpath(str(wanted))
 
 
 def test_toolchain_answer_must_name_a_usable_developer_dir(tmp_path, darwin, monkeypatch):
