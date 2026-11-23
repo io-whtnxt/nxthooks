@@ -154,6 +154,24 @@ def test_toolchain_answer_must_name_a_usable_developer_dir(tmp_path, darwin, mon
     assert shim._toolchain_present() is True
 
 
+def test_toolchain_git_aliasing_the_shim_is_not_usable(tmp_path, rig, darwin, monkeypatch):
+    dev = tmp_path / "dev"
+    (dev / "usr" / "bin").mkdir(parents=True)
+    (dev / "usr" / "bin" / "git").symlink_to(rig["shim"])
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(_write(
+        tmp_path / "select.sh", f"#!/bin/sh\necho '{dev}'\n")))
+    assert shim._toolchain_present() is False
+
+
+def test_toolchain_answer_slash_is_not_usable(tmp_path, darwin, monkeypatch):
+    if not os.path.isfile("/usr/bin/git"):
+        pytest.skip("no Apple shim on this host")
+    monkeypatch.setattr(shim, "_SYSTEM_GIT_SHIM", os.path.realpath("/usr/bin/git"))
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(_write(
+        tmp_path / "select.sh", "#!/bin/sh\necho '/'\n")))
+    assert shim._toolchain_present() is False
+
+
 def test_empty_path_with_cwd_git_is_missing_and_never_runs(tmp_path, darwin, monkeypatch):
     _write(tmp_path / "git", "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("PATH", "")
