@@ -41,7 +41,7 @@ def rig(tmp_path, darwin):
     stand_dir = tmp_path / "standaloned"
     stand_dir.mkdir()
     _write(stand_dir / "git", "#!/bin/sh\nexit 0\n")
-    darwin.setattr(shim, "_SYSTEM_GIT_SHIM", str(fake_shim))
+    darwin.setattr(shim, "_SYSTEM_GIT_SHIM", os.path.realpath(str(fake_shim)))
     darwin.setenv("PATH", f"{shim_dir}{os.pathsep}{stand_dir}")
     return {"shim": fake_shim, "sentinel": shim_dir / "sentinel",
             "stand": stand_dir / "git"}
@@ -66,6 +66,7 @@ def test_shim_yields_to_standalone_later_in_path(tmp_path, rig, darwin, monkeypa
     done = run_git(["status"], str(tmp_path), timeout=10)
     assert done.outcome == "ok", (done.outcome, done.refusal, done.stderr)
     assert not rig["sentinel"].exists()
+    assert shim._find_git({"PATH": os.environ["PATH"]}) == os.path.realpath(str(rig["stand"]))
 
 
 def test_standalone_before_shim_never_probes_the_toolchain(tmp_path, rig, darwin, monkeypatch):
@@ -169,4 +170,14 @@ def test_alias_to_the_shim_counts_as_the_shim(tmp_path, rig, darwin, monkeypatch
     monkeypatch.setattr(shim, "_toolchain_present", lambda: False)
     assert shim._find_git({"PATH": str(alias_dir)}) is None
     monkeypatch.setattr(shim, "_toolchain_present", lambda: True)
-    assert shim._find_git({"PATH": str(alias_dir)}) == str(rig["shim"])
+    assert shim._find_git({"PATH": str(alias_dir)}) == os.path.realpath(str(rig["shim"]))
+
+
+def test_symlinked_ancestor_still_classifies_the_shim(tmp_path, rig, darwin, monkeypatch):
+    linkroot = tmp_path / "linkroot"
+    linkroot.symlink_to(tmp_path, target_is_directory=True)
+    darwin.setenv("PATH", str(linkroot / "shimdir"))
+    monkeypatch.setattr(shim, "_toolchain_present", lambda: False)
+    _never_spawn(monkeypatch)
+    assert run_git(["status"], str(tmp_path), timeout=5).outcome == "missing"
+    assert not rig["sentinel"].exists()
