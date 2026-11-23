@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,7 +35,6 @@ def darwin(monkeypatch):
 def rig(tmp_path, darwin):
     """A fake shim that records execution, a fake standalone, and the module
     pointed at the fake shim as the system one."""
-    sentinel = tmp_path / "shim-ran"
     shim_dir = tmp_path / "shimdir"
     shim_dir.mkdir()
     fake_shim = _write(shim_dir / "git",
@@ -103,10 +103,33 @@ def test_toolchain_probe_fails_closed_on_errors(tmp_path, darwin, monkeypatch):
 
 
 def test_toolchain_probe_fails_closed_on_timeout(tmp_path, darwin, monkeypatch):
-    slow = _write(tmp_path / "slow-select.sh", "#!/bin/sh\nsleep 30\n")
-    monkeypatch.setattr(shim, "_XCODE_SELECT", str(slow))
-    monkeypatch.setattr(shim, "_TOOLCHAIN_TIMEOUT", 0.05)
+    def slow(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=shim._TOOLCHAIN_TIMEOUT)
+    monkeypatch.setattr(shim.subprocess, "run", slow)
     assert shim._toolchain_present() is False
+
+
+def test_toolchain_answer_must_name_a_usable_developer_dir(tmp_path, darwin, monkeypatch):
+    def printer(text):
+        return _write(tmp_path / "select.sh", f"#!/bin/sh\necho '{text}'\n")
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(printer("")))
+    assert shim._toolchain_present() is False
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(printer("Library/Developer/CommandLineTools")))
+    assert shim._toolchain_present() is False
+    bare = tmp_path / "bare-toolchain"
+    (bare / "usr" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(shim, "_XCODE_SELECT", str(printer(str(bare))))
+    assert shim._toolchain_present() is False
+    _write(bare / "usr" / "bin" / "git", "#!/bin/sh\nexit 0\n")
+    assert shim._toolchain_present() is True
+
+
+def test_empty_path_with_cwd_git_is_missing_and_never_runs(tmp_path, darwin, monkeypatch):
+    _write(tmp_path / "git", "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.chdir(tmp_path)
+    _never_spawn(monkeypatch)
+    assert run_git(["status"], str(tmp_path), timeout=5).outcome == "missing"
 
 
 def test_alias_to_the_shim_counts_as_the_shim(tmp_path, rig, darwin):

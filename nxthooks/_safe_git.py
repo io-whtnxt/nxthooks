@@ -289,7 +289,7 @@ def _spawn(argv: list[str], cwd: str, env: dict[str, str], stdin: bytes,
 _SYSTEM_GIT_SHIM = "/usr/bin/git"
 #: The oracle for a usable toolchain, by absolute path, never through the shell.
 _XCODE_SELECT = "/usr/bin/xcode-select"
-_TOOLCHAIN_TIMEOUT = 10.0
+_TOOLCHAIN_TIMEOUT = 2.0
 
 
 def _is_system_shim(candidate: str) -> bool:
@@ -298,10 +298,11 @@ def _is_system_shim(candidate: str) -> bool:
 
 
 def _toolchain_present() -> bool:
-    """Whether macOS answers a toolchain path. `xcode-select -p` prints one
-    and exits 0 when CLT or Xcode is installed; anything else -- missing
-    binary, failure, timeout -- is fail-closed, so the shim is never run on
-    a guess. No shell, no stdio interaction, bounded."""
+    """Whether macOS answers a usable toolchain. `xcode-select -p` must exit
+    0 naming a nonempty absolute developer dir holding a real `usr/bin/git`;
+    anything else -- missing binary, failure, timeout, an unusable answer --
+    is fail-closed, so the shim is never run on a guess. No shell, no stdio
+    interaction, bounded."""
     try:
         completed = subprocess.run(
             [_XCODE_SELECT, "-p"],
@@ -314,7 +315,14 @@ def _toolchain_present() -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return completed.returncode == 0
+    if completed.returncode != 0:
+        return False
+    lines = completed.stdout.decode("utf-8", errors="replace").splitlines()
+    root = lines[0].strip() if lines else ""
+    if not root or not os.path.isabs(root):
+        return False
+    git = os.path.join(root, "usr", "bin", "git")
+    return os.path.isfile(git) and os.access(git, os.X_OK)
 
 
 def _find_git(env: dict[str, str]) -> "str | None":
@@ -323,8 +331,12 @@ def _find_git(env: dict[str, str]) -> "str | None":
     # In PATH order, skipping an unusable system shim so a standalone git
     # later in the same PATH still wins -- and so a shim-only PATH reads as
     # missing instead of summoning the install dialog. Deliberately uncached:
-    # a negative answer must not survive a hot CLT install.
+    # a negative answer must not survive a hot CLT install. Every candidate
+    # must be absolute: an empty PATH entry would otherwise join to a bare
+    # `git` and probe the working directory, where `which` answers None.
     for directory in env["PATH"].split(os.pathsep):
+        if not os.path.isabs(directory):
+            continue
         candidate = os.path.join(directory, "git")
         if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
             continue
