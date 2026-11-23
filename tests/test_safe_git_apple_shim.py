@@ -87,7 +87,7 @@ def test_working_toolchain_selects_the_shim_path_without_running_it(tmp_path, ri
                         lambda argv, *a, **k: (seen.append(argv[0]),
                                               _Outcome(0, b"", b"", False, False))[1])
     assert run_git(["status"], str(tmp_path), timeout=10).outcome == "ok"
-    assert seen and all(arg == str(rig["shim"]) for arg in seen)
+    assert seen and all(arg == os.path.realpath(str(rig["shim"])) for arg in seen)
     assert not rig["sentinel"].exists()
 
 
