@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import INSTALLABLE_HARNESSES, __version__, contract
 from . import dispatch as dispatch_mod
@@ -55,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep an installed runtime whose VERSION is newer than "
                         "this package instead of replacing it")
     p.set_defaults(func=lifecycle.cmd_install)
+
+    p = sub.add_parser("refresh-dispatchers", help="refresh installed dispatchers and interpreter marker")
+    p.add_argument("--python", type=Path, required=True, help="absolute interpreter path")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=lifecycle.cmd_refresh_dispatchers)
 
     p = sub.add_parser("uninstall", help="remove NxtHooks wiring and artifacts")
     p.add_argument("--keep-runtime", action="store_true",

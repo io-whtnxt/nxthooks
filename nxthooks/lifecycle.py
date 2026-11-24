@@ -39,10 +39,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1064,6 +1067,77 @@ def _switch_runtime(lib: Path, staged: Path) -> None:
         _discard(retired)
 
 
+DISPATCHERS = ("cc-dispatch.sh", "codex-dispatch.sh")
+
+
+def _dispatcher_body(source: Path, name: str, root: Path, state: Path, python: str) -> str:
+    template = (source / "adapters" / name).read_text(encoding="utf-8")
+    # Replace complete shell words in one pass, so a path cannot introduce
+    # shell syntax or be mistaken for another template placeholder.
+    words = {
+        '"{{ROOT}}/lib/run_nxthooks.py"': str(root / "lib" / "run_nxthooks.py"),
+        '"{{STATE}}/runner-missing.stamp"': str(state / "runner-missing.stamp"),
+        '"{{STATE}}"': str(state),
+        '"{{PYTHON}}"': python,
+    }
+    pattern = "|".join(map(re.escape, words))
+    return re.sub(pattern, lambda match: shlex.quote(words[match[0]]), template)
+
+
+def _refresh_targets(root: Path, python: Path) -> list[Path]:
+    if not python.is_absolute() or not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError(f"expected an absolute executable interpreter: {python}")
+    targets = [root / "bin" / name for name in DISPATCHERS] + [root / "PYTHON"]
+    for target in targets:
+        if target.is_symlink() or not target.is_file():
+            raise ValueError(f"expected an installed interpreter target: {target}")
+    return targets
+
+
+def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
+    """Re-render the installed dispatchers and interpreter marker for `args.python`.
+
+    A dry run only validates and lists the targets: it takes no lifecycle lock,
+    so a read-only preview never creates the lock or its directory."""
+    host = host or Host.local()
+    if args.dry_run:
+        for target in _refresh_targets(host.root(), args.python):
+            print(f"would rewrite {target}")
+        return 0
+    return _refresh_dispatchers_locked(args, host)
+
+
+@exclusive_lifecycle
+def _refresh_dispatchers_locked(args, host: Host | None = None) -> int:
+    host = host or Host.local()
+    root = host.root()
+    targets = _refresh_targets(root, args.python)
+    for target in targets:
+        print(f"rewrite {target}")
+
+    staged = {}
+    try:
+        for target in targets:
+            if target.name == "PYTHON":
+                body = f"{args.python}\n"
+                mode = target.stat().st_mode & 0o777
+            else:
+                body = _dispatcher_body(_pkg_dir(), target.name, root, host.state_dir, str(args.python))
+                mode = 0o755
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                             delete=False) as stream:
+                temp = Path(stream.name)
+                staged[target] = temp
+                stream.write(body)
+                os.fchmod(stream.fileno(), mode)
+        for target, temp in staged.items():
+            os.replace(temp, target)
+    finally:
+        for temp in staged.values():
+            temp.unlink(missing_ok=True)
+    return 0
+
+
 def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
     root = host.root(cfg)
     lib = root / "lib" / "nxthooks"
@@ -1083,15 +1157,10 @@ def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
 
     shutil.copy2(src_pkg / "adapters" / "run_nxthooks.py", root / "lib" / "run_nxthooks.py")
 
-    for name in ("cc-dispatch.sh", "codex-dispatch.sh"):
-        body = (src_pkg / "adapters" / name).read_text(encoding="utf-8")
+    for name in DISPATCHERS:
         target = bin_dir / name
-        target.write_text(
-            body.replace("{{PYTHON}}", _python())
-                .replace("{{ROOT}}", str(root))
-                .replace("{{STATE}}", str(host.state_dir)),
-            encoding="utf-8",
-        )
+        target.write_text(_dispatcher_body(src_pkg, name, root, host.state_dir, _python()),
+                          encoding="utf-8")
         target.chmod(0o755)
 
     (root / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
