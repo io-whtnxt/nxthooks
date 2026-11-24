@@ -1,4 +1,5 @@
 import fcntl
+from pathlib import Path
 import os
 import stat
 import sys
@@ -95,3 +96,18 @@ def test_refresh_replaces_targets_under_lifecycle_lock(hooks_machine, monkeypatc
     monkeypatch.setattr(lifecycle.os, "replace", replace)
     assert cli.main(["refresh-dispatchers", "--python", sys.executable]) == 0
     assert replaced == targets
+
+
+def test_direct_dry_run_honours_the_given_host_and_writes_nothing(hooks_machine, capsys):
+    """Review 00fef284: a direct caller with dry_run=True and its own host must get a preview of that host."""
+    import argparse
+    host = hooks_machine()
+    root = host.root()
+    (root / "bin").mkdir(parents=True)
+    targets = [root / "bin" / name for name in ("cc-dispatch.sh", "codex-dispatch.sh")] + [root / "PYTHON"]
+    for target in targets:
+        target.write_text("old\n")
+    args = argparse.Namespace(python=Path(sys.executable), dry_run=True)
+    assert lifecycle.cmd_refresh_dispatchers(args, host) == 0
+    assert all(target.read_text() == "old\n" for target in targets)
+    assert [line.split(" ", 2)[2] for line in capsys.readouterr().out.splitlines()] == [str(t) for t in targets]

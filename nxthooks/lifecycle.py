@@ -1094,18 +1094,21 @@ def _refresh_targets(root: Path, python: Path) -> list[Path]:
     return targets
 
 
-def refresh_dispatchers(args) -> int:
-    if not args.dry_run:
-        return cmd_refresh_dispatchers(args)
-    # A read-only preview must not create the lifecycle lock or its directory.
-    for target in _refresh_targets(Host.local().root(), args.python):
-        print(f"would rewrite {target}")
-    return 0
+def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
+    """Re-render the installed dispatchers and interpreter marker for `args.python`.
+
+    A dry run only validates and lists the targets: it takes no lifecycle lock,
+    so a read-only preview never creates the lock or its directory."""
+    host = host or Host.local()
+    if args.dry_run:
+        for target in _refresh_targets(host.root(), args.python):
+            print(f"would rewrite {target}")
+        return 0
+    return _refresh_dispatchers_locked(args, host)
 
 
 @exclusive_lifecycle
-def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
-    """Atomically replace the installed dispatchers and interpreter marker."""
+def _refresh_dispatchers_locked(args, host: Host | None = None) -> int:
     host = host or Host.local()
     root = host.root()
     targets = _refresh_targets(root, args.python)
