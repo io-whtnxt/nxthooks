@@ -39,10 +39,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1064,6 +1067,56 @@ def _switch_runtime(lib: Path, staged: Path) -> None:
         _discard(retired)
 
 
+DISPATCHERS = ("cc-dispatch.sh", "codex-dispatch.sh")
+
+
+def _dispatcher_body(source: Path, name: str, root: Path, state: Path, python: str) -> str:
+    template = (source / "adapters" / name).read_text(encoding="utf-8")
+    # Replace complete shell words in one pass, so a path cannot introduce
+    # shell syntax or be mistaken for another template placeholder.
+    words = {
+        '"{{ROOT}}/lib/run_nxthooks.py"': str(root / "lib" / "run_nxthooks.py"),
+        '"{{STATE}}/runner-missing.stamp"': str(state / "runner-missing.stamp"),
+        '"{{STATE}}"': str(state),
+        '"{{PYTHON}}"': python,
+    }
+    pattern = "|".join(map(re.escape, words))
+    return re.sub(pattern, lambda match: shlex.quote(words[match[0]]), template)
+
+
+def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
+    """Replace only the two installed transports, each with an atomic rename."""
+    python = args.python
+    if not python.is_absolute() or not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError(f"expected an absolute executable interpreter: {python}")
+    host = host or Host.local()
+    root = host.root()
+    targets = [root / "bin" / name for name in DISPATCHERS]
+    for target in targets:
+        if not target.is_file() or target.is_symlink():
+            raise ValueError(f"expected an installed dispatcher: {target}")
+        print(f"{'would rewrite' if args.dry_run else 'rewrite'} {target}")
+    if args.dry_run:
+        return 0
+
+    staged = {}
+    try:
+        for target in targets:
+            body = _dispatcher_body(_pkg_dir(), target.name, root, host.state_dir, str(python))
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                             delete=False) as stream:
+                temp = Path(stream.name)
+                staged[target] = temp
+                stream.write(body)
+                os.fchmod(stream.fileno(), target.stat().st_mode & 0o777)
+        for target, temp in staged.items():
+            os.replace(temp, target)
+    finally:
+        for temp in staged.values():
+            temp.unlink(missing_ok=True)
+    return 0
+
+
 def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
     root = host.root(cfg)
     lib = root / "lib" / "nxthooks"
@@ -1083,15 +1136,10 @@ def install_runtime(host: Host, cfg: dict, source: Path | None = None) -> Path:
 
     shutil.copy2(src_pkg / "adapters" / "run_nxthooks.py", root / "lib" / "run_nxthooks.py")
 
-    for name in ("cc-dispatch.sh", "codex-dispatch.sh"):
-        body = (src_pkg / "adapters" / name).read_text(encoding="utf-8")
+    for name in DISPATCHERS:
         target = bin_dir / name
-        target.write_text(
-            body.replace("{{PYTHON}}", _python())
-                .replace("{{ROOT}}", str(root))
-                .replace("{{STATE}}", str(host.state_dir)),
-            encoding="utf-8",
-        )
+        target.write_text(_dispatcher_body(src_pkg, name, root, host.state_dir, _python()),
+                          encoding="utf-8")
         target.chmod(0o755)
 
     (root / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
