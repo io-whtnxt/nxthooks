@@ -57,10 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "this package instead of replacing it")
     p.set_defaults(func=lifecycle.cmd_install)
 
-    p = sub.add_parser("refresh-dispatchers", help="re-render installed shell dispatchers")
+    p = sub.add_parser("refresh-dispatchers", help="refresh installed dispatchers and interpreter marker")
     p.add_argument("--python", type=Path, required=True, help="absolute interpreter path")
     p.add_argument("--dry-run", action="store_true")
-    p.set_defaults(func=lifecycle.cmd_refresh_dispatchers)
+    p.set_defaults(func=lifecycle.refresh_dispatchers)
 
     p = sub.add_parser("uninstall", help="remove NxtHooks wiring and artifacts")
     p.add_argument("--keep-runtime", action="store_true",

@@ -1,13 +1,16 @@
+import fcntl
 import os
+import stat
+import sys
 import subprocess
 
 import pytest
 
-from nxthooks import cli, lifecycle
+from nxthooks import cli, lifecycle, operation_lock
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_refresh_only_dispatchers(hooks_machine, monkeypatch, capsys, dry_run):
+def test_refresh_updates_only_interpreter_targets(hooks_machine, monkeypatch, capsys, dry_run):
     host = hooks_machine("claude-code", "codex")
     monkeypatch.setattr(lifecycle.Host, "local", lambda: host)
     root = host.root()
@@ -15,7 +18,9 @@ def test_refresh_only_dispatchers(hooks_machine, monkeypatch, capsys, dry_run):
     bin_dir.mkdir(parents=True)
     for name in ("cc-dispatch.sh", "codex-dispatch.sh"):
         (bin_dir / name).write_text("old transport")
-        (bin_dir / name).chmod(0o755)
+        (bin_dir / name).chmod(0o644)
+    marker = root / "PYTHON"
+    marker.write_text("old python\n")
     sentinel = root / "untouched"
     sentinel.write_text("preserve")
     interpreter = host.home / 'python $HOME "quoted"'
@@ -30,12 +35,15 @@ def test_refresh_only_dispatchers(hooks_machine, monkeypatch, capsys, dry_run):
     output = capsys.readouterr().out
     assert set(host.home.rglob("*")) == before
     assert sentinel.read_text() == "preserve"
+    assert str(marker) in output
+    assert marker.read_text() == ("old python\n" if dry_run else f"{interpreter}\n")
     for script in bin_dir.iterdir():
         assert str(script) in output
         if dry_run:
             assert script.read_text() == "old transport"
+            assert stat.S_IMODE(script.stat().st_mode) == 0o644
         else:
-            assert os.access(script, os.X_OK)
+            assert stat.S_IMODE(script.stat().st_mode) == 0o755
             assert subprocess.check_output(["sh", str(script)], text=True) == "interpreter invoked"
 
 
@@ -46,3 +54,44 @@ def test_refresh_refuses_invalid_interpreter(hooks_machine, monkeypatch, interpr
     before = set(host.home.rglob("*"))
     assert cli.main(["refresh-dispatchers", "--python", interpreter]) == 1
     assert set(host.home.rglob("*")) == before
+
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_refresh_validates_every_target_before_printing(hooks_machine, monkeypatch, capsys, dry_run):
+    host = hooks_machine()
+    monkeypatch.setattr(lifecycle.Host, "local", lambda: host)
+    root = host.root()
+    (root / "bin").mkdir(parents=True)
+    first = root / "bin" / "cc-dispatch.sh"
+    first.write_text("old")
+    args = ["refresh-dispatchers", "--python", sys.executable]
+    assert cli.main(args + (["--dry-run"] if dry_run else [])) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "codex-dispatch.sh" in captured.err
+    assert first.read_text() == "old"
+
+
+def test_refresh_replaces_targets_under_lifecycle_lock(hooks_machine, monkeypatch):
+    host = hooks_machine()
+    monkeypatch.setattr(lifecycle.Host, "local", lambda: host)
+    root = host.root()
+    (root / "bin").mkdir(parents=True)
+    targets = [root / "bin" / name for name in ("cc-dispatch.sh", "codex-dispatch.sh")]
+    targets.append(root / "PYTHON")
+    for target in targets:
+        target.touch()
+    original = os.replace
+    replaced = []
+
+    def replace(src, dst):
+        with operation_lock.lock_path(host).open("r") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        replaced.append(dst)
+        return original(src, dst)
+
+    monkeypatch.setattr(lifecycle.os, "replace", replace)
+    assert cli.main(["refresh-dispatchers", "--python", sys.executable]) == 0
+    assert replaced == targets

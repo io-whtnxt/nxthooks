@@ -1084,31 +1084,49 @@ def _dispatcher_body(source: Path, name: str, root: Path, state: Path, python: s
     return re.sub(pattern, lambda match: shlex.quote(words[match[0]]), template)
 
 
-def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
-    """Replace only the two installed transports, each with an atomic rename."""
-    python = args.python
+def _refresh_targets(root: Path, python: Path) -> list[Path]:
     if not python.is_absolute() or not python.is_file() or not os.access(python, os.X_OK):
         raise ValueError(f"expected an absolute executable interpreter: {python}")
+    targets = [root / "bin" / name for name in DISPATCHERS] + [root / "PYTHON"]
+    for target in targets:
+        if target.is_symlink() or not target.is_file():
+            raise ValueError(f"expected an installed interpreter target: {target}")
+    return targets
+
+
+def refresh_dispatchers(args) -> int:
+    if not args.dry_run:
+        return cmd_refresh_dispatchers(args)
+    # A read-only preview must not create the lifecycle lock or its directory.
+    for target in _refresh_targets(Host.local().root(), args.python):
+        print(f"would rewrite {target}")
+    return 0
+
+
+@exclusive_lifecycle
+def cmd_refresh_dispatchers(args, host: Host | None = None) -> int:
+    """Atomically replace the installed dispatchers and interpreter marker."""
     host = host or Host.local()
     root = host.root()
-    targets = [root / "bin" / name for name in DISPATCHERS]
+    targets = _refresh_targets(root, args.python)
     for target in targets:
-        if not target.is_file() or target.is_symlink():
-            raise ValueError(f"expected an installed dispatcher: {target}")
-        print(f"{'would rewrite' if args.dry_run else 'rewrite'} {target}")
-    if args.dry_run:
-        return 0
+        print(f"rewrite {target}")
 
     staged = {}
     try:
         for target in targets:
-            body = _dispatcher_body(_pkg_dir(), target.name, root, host.state_dir, str(python))
+            if target.name == "PYTHON":
+                body = f"{args.python}\n"
+                mode = target.stat().st_mode & 0o777
+            else:
+                body = _dispatcher_body(_pkg_dir(), target.name, root, host.state_dir, str(args.python))
+                mode = 0o755
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
                                              delete=False) as stream:
                 temp = Path(stream.name)
                 staged[target] = temp
                 stream.write(body)
-                os.fchmod(stream.fileno(), target.stat().st_mode & 0o777)
+                os.fchmod(stream.fileno(), mode)
         for target, temp in staged.items():
             os.replace(temp, target)
     finally:
